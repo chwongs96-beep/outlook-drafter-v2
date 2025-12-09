@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+*.xlsx
+draft_configs.json
+draft_history.json
+.vscode/

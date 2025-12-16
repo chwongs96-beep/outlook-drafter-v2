@@ -46,6 +46,7 @@ class OutlookDraftManager:
         self.selected_configs = []  # 批量处理选中的配置列表
         self.custom_placeholders = {}  # 自定义占位符字典 {'占位符名': '替换值'}
         self.email_signatures = self.load_signatures()  # 邮件签名字典
+        self.content_templates = self.load_content_templates()  # 内容模板字典
         self.scheduled_sends = {}  # 定时发送字典 {草稿ID: 发送时间}
         self.current_language = 'zh'  # 当前语言 'zh' 或 'en'
         self.ui_scale = 1.0  # 界面缩放比例
@@ -185,6 +186,10 @@ class OutlookDraftManager:
         ttk.Button(config_frame, text="导出配置", command=self.export_config).grid(row=0, column=5, padx=5)
         ttk.Button(config_frame, text="导入配置", command=self.import_config).grid(row=0, column=6, padx=5)
         
+        # 选项：加载配置时是否覆盖Excel路径
+        self.load_excel_path_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(config_frame, text="加载Excel路径", variable=self.load_excel_path_var).grid(row=0, column=7, padx=5)
+        
         # 配置名称（第二行左侧）
         ttk.Label(config_frame, text="配置名称:").grid(row=1, column=0, padx=5, pady=5, sticky=tk.E)
         self.config_name_var = tk.StringVar()
@@ -308,8 +313,9 @@ class OutlookDraftManager:
         attachment_subframe.grid(row=4, column=0, columnspan=3, sticky=(tk.W, tk.E), padx=5, pady=3)
         ttk.Label(attachment_subframe, text="附件:").grid(row=0, column=0, sticky=tk.W)
         ttk.Button(attachment_subframe, text="添加附件", command=self.add_attachment).grid(row=0, column=1, padx=5)
-        ttk.Button(attachment_subframe, text="删除选中", command=self.remove_selected_attachment).grid(row=0, column=2, padx=5)
-        ttk.Button(attachment_subframe, text="清空附件", command=self.clear_attachments).grid(row=0, column=3, padx=5)
+        ttk.Button(attachment_subframe, text="➕ Excel文件", command=self.attach_current_excel).grid(row=0, column=2, padx=5)
+        ttk.Button(attachment_subframe, text="删除选中", command=self.remove_selected_attachment).grid(row=0, column=3, padx=5)
+        ttk.Button(attachment_subframe, text="清空附件", command=self.clear_attachments).grid(row=0, column=4, padx=5)
 
         self.attachment_listbox = tk.Listbox(attachment_subframe, height=3)
         self.attachment_listbox.grid(row=1, column=0, columnspan=4, sticky=(tk.W, tk.E), pady=3)
@@ -335,6 +341,7 @@ class OutlookDraftManager:
         body_button_frame = ttk.Frame(email_frame)
         body_button_frame.grid(row=6, column=1, columnspan=2, sticky=tk.W, padx=5, pady=3)
         ttk.Button(body_button_frame, text="  编辑正文", command=self.edit_body_in_window, width=15).pack(side=tk.LEFT, padx=5)
+        ttk.Button(body_button_frame, text="📄 模板管理", command=self.manage_content_templates, width=15).pack(side=tk.LEFT, padx=5)
         self.body_preview_label = ttk.Label(body_button_frame, text="(点击编辑正文内容)", foreground='gray')
         self.body_preview_label.pack(side=tk.LEFT, padx=5)
         
@@ -573,7 +580,11 @@ class OutlookDraftManager:
         
         config = self.configs[config_name]
         self.config_name_var.set(config_name)
-        self.excel_path_var.set(config.get("excel_path", ""))
+        
+        # 只有在勾选了"加载Excel路径"时才覆盖当前路径
+        if self.load_excel_path_var.get():
+            self.excel_path_var.set(config.get("excel_path", ""))
+            
         self.range_var.set(config.get("data_range", "A1:C10"))
         
         # 加载收件人列表
@@ -1135,6 +1146,22 @@ class OutlookDraftManager:
                 excel_html = self.format_excel_data_as_table()
                 body_html = body_html.replace("{EXCEL_DATA}", excel_html)
             
+            # 处理 {EXCEL_IMAGE} 占位符
+            if "{EXCEL_IMAGE}" in body_html:
+                try:
+                    generated_images = self.generate_excel_images()
+                    if generated_images:
+                        img_fragments = []
+                        for img_path in generated_images:
+                            cid = f"img_{uuid.uuid4().hex}@local"
+                            self.inline_images.append({'path': img_path, 'cid': cid})
+                            img_tag = f'<img src="cid:{cid}" alt="Excel表格" style="max-width:100%; border:1px solid #ccc;"><br/>'
+                            img_fragments.append(img_tag)
+                        
+                        body_html = body_html.replace("{EXCEL_IMAGE}", "\n".join(img_fragments))
+                except Exception as e:
+                    print(f"生成图片失败: {e}")
+
             # 将纯文本转换为HTML（保留换行）
             body_html = body_html.replace("\n", "<br>")
             mail.HTMLBody = body_html
@@ -1191,6 +1218,28 @@ class OutlookDraftManager:
                 self.attachments.append(file_path)
         self.update_attachment_list()
         self.status_var.set(f"已添加 {len(files)} 个附件")
+
+    def attach_current_excel(self):
+        """将当前选中的 Excel 文件添加为附件"""
+        excel_paths_str = self.excel_path_var.get()
+        if not excel_paths_str:
+             messagebox.showwarning("警告", "请先选择 Excel 文件")
+             return
+        
+        file_paths = excel_paths_str.split(';')
+        count = 0
+        for path in file_paths:
+            path = path.strip()
+            if path and os.path.exists(path):
+                if path not in self.attachments:
+                    self.attachments.append(path)
+                    count += 1
+        
+        if count > 0:
+            self.update_attachment_list()
+            self.status_var.set(f"已添加 {count} 个 Excel 文件作为附件")
+        else:
+            messagebox.showinfo("提示", "Excel 文件已在附件列表中")
     
     def clear_attachments(self):
         """清空附件列表"""
@@ -1338,14 +1387,44 @@ class OutlookDraftManager:
             print(f"COM Error: {e}")
             return None
 
-    def paste_as_picture(self):
-        """粘贴为图片（Picture）- 将 Excel 数据转换为图片并嵌入"""
-        # 获取当前设置
+    def generate_excel_images(self):
+        """生成Excel截图，返回图片路径列表"""
         excel_paths_str = self.excel_path_var.get()
         sheet_name = self.sheet_combo.get()
         data_range = self.range_var.get().strip()
         
         if not excel_paths_str or not sheet_name or not data_range:
+             return []
+
+        file_paths = excel_paths_str.split(';')
+        generated_images = []
+        
+        for excel_path in file_paths:
+            if not os.path.exists(excel_path):
+                continue
+            
+            # 尝试使用 COM 获取精确截图
+            img_path = self.copy_range_as_image_com(excel_path, sheet_name, data_range)
+            
+            # 如果 COM 失败，回退到手动绘制
+            if not img_path and self.current_excel_data:
+                    img_path = self.create_excel_image(self.current_excel_data)
+            
+            if img_path and os.path.exists(img_path):
+                generated_images.append(img_path)
+        
+        if not generated_images and self.current_excel_data:
+            # 如果没有生成图片，尝试只用 current_excel_data 生成
+            img_path = self.create_excel_image(self.current_excel_data)
+            if img_path:
+                generated_images.append(img_path)
+                
+        return generated_images
+
+    def paste_as_picture(self):
+        """粘贴为图片（Picture）- 将 Excel 数据转换为图片并嵌入"""
+        # 获取当前设置
+        if not self.excel_path_var.get() or not self.sheet_combo.get() or not self.range_var.get():
              messagebox.showwarning("警告", "请先选择 Excel 文件、工作表和数据范围")
              return
 
@@ -1356,31 +1435,10 @@ class OutlookDraftManager:
             self.status_var.set("正在通过 Excel 生成图片...")
             self.root.update()
             
-            file_paths = excel_paths_str.split(';')
-            generated_images = []
-            
-            for excel_path in file_paths:
-                if not os.path.exists(excel_path):
-                    continue
-                
-                # 尝试使用 COM 获取精确截图
-                img_path = self.copy_range_as_image_com(excel_path, sheet_name, data_range)
-                
-                # 如果 COM 失败，回退到手动绘制
-                if not img_path and self.current_excel_data:
-                     img_path = self.create_excel_image(self.current_excel_data)
-                
-                if img_path and os.path.exists(img_path):
-                    generated_images.append(img_path)
+            generated_images = self.generate_excel_images()
             
             if not generated_images:
-                # 如果没有生成图片，尝试只用 current_excel_data 生成
-                if self.current_excel_data:
-                    img_path = self.create_excel_image(self.current_excel_data)
-                    if img_path:
-                        generated_images.append(img_path)
-                else:
-                    raise RuntimeError("未能生成图片，请检查 Excel 是否安装或范围是否正确")
+                raise RuntimeError("未能生成图片，请检查 Excel 是否安装或范围是否正确")
 
             # 插入图片到正文
             html_fragments = []
@@ -1405,6 +1463,16 @@ class OutlookDraftManager:
                 new_body = body.replace("{EXCEL_DATA}", full_html)
                 self.body_text.delete(1.0, tk.END)
                 self.body_text.insert(1.0, new_body)
+            elif "{EXCEL_IMAGE}" in body:
+                # 如果用户已经使用了占位符，提示是否替换
+                if messagebox.askyesno("提示", "检测到 {EXCEL_IMAGE} 占位符。\n是否直接替换为图片？\n(选择'否'将保留占位符，在创建草稿时自动生成)") :
+                    new_body = body.replace("{EXCEL_IMAGE}", full_html)
+                    self.body_text.delete(1.0, tk.END)
+                    self.body_text.insert(1.0, new_body)
+                else:
+                    # 用户选择保留占位符，不做任何修改
+                    messagebox.showinfo("提示", "已保留 {EXCEL_IMAGE} 占位符。\n图片将在创建草稿时自动生成。")
+                    return
             else:
                 if body:
                     self.body_text.insert(tk.END, "\n\n" + full_html)
@@ -1651,6 +1719,15 @@ class OutlookDraftManager:
             headers = self.current_excel_data[0]
             created_count = 0
             
+            # 预先生成图片（如果需要且是静态的）
+            # 这里我们假设批量邮件使用相同的Excel截图（来自配置的范围）
+            batch_images = []
+            if "{EXCEL_IMAGE}" in body_template:
+                 try:
+                     batch_images = self.generate_excel_images()
+                 except Exception as e:
+                     print(f"批量生成图片失败: {e}")
+
             # 从第二行开始（跳过表头）
             for row_data in self.current_excel_data[1:]:
                 # 创建变量字典
@@ -1687,13 +1764,38 @@ class OutlookDraftManager:
                 mail.Subject = subject_filled
                 
                 # 处理HTML正文
-                body_html = body_filled.replace("\n", "<br>")
+                body_html = body_filled
+                
+                # 处理 {EXCEL_IMAGE} 占位符
+                current_email_inline_images = []
+                if "{EXCEL_IMAGE}" in body_html and batch_images:
+                    img_fragments = []
+                    for img_path in batch_images:
+                        cid = f"img_{uuid.uuid4().hex}@local"
+                        current_email_inline_images.append({'path': img_path, 'cid': cid})
+                        img_tag = f'<img src="cid:{cid}" alt="Excel表格" style="max-width:100%; border:1px solid #ccc;"><br/>'
+                        img_fragments.append(img_tag)
+                    
+                    body_html = body_html.replace("{EXCEL_IMAGE}", "\n".join(img_fragments))
+
+                body_html = body_html.replace("\n", "<br>")
                 mail.HTMLBody = body_html
                 
                 # 添加附件
                 for attachment_path in self.attachments:
                     if os.path.exists(attachment_path):
                         mail.Attachments.Add(attachment_path)
+                
+                # 添加内嵌图片
+                for img in current_email_inline_images:
+                    path = img['path']
+                    cid = img['cid']
+                    if os.path.exists(path):
+                        try:
+                            att = mail.Attachments.Add(path)
+                            att.PropertyAccessor.SetProperty("http://schemas.microsoft.com/mapi/proptag/0x3712001F", cid)
+                        except:
+                            pass
                 
                 mail.Save()
                 created_count += 1
@@ -2583,6 +2685,8 @@ class OutlookDraftManager:
         menu.add_separator()
         menu.add_command(label="📊 {EXCEL_DATA} - 插入完整表格", 
                         command=lambda: text_widget.insert(tk.INSERT, "{EXCEL_DATA}"))
+        menu.add_command(label="🖼️ {EXCEL_IMAGE} - 插入Excel截图", 
+                        command=lambda: text_widget.insert(tk.INSERT, "{EXCEL_IMAGE}"))
         
         menu.add_separator()
         
@@ -2687,6 +2791,8 @@ class OutlookDraftManager:
         menu.add_separator()
         menu.add_command(label="📊 {EXCEL_DATA} - 插入完整表格", 
                         command=lambda: self.insert_text_placeholder("{EXCEL_DATA}"))
+        menu.add_command(label="🖼️ {EXCEL_IMAGE} - 插入Excel截图", 
+                        command=lambda: self.insert_text_placeholder("{EXCEL_IMAGE}"))
         
         menu.add_separator()
         
@@ -2914,6 +3020,172 @@ class OutlookDraftManager:
         except Exception as e:
             messagebox.showerror("错误", f"保存签名失败: {str(e)}")
             return False
+
+    def load_content_templates(self):
+        """加载内容模板"""
+        template_file = "content_templates.json"
+        if os.path.exists(template_file):
+            try:
+                with open(template_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except:
+                pass
+        # 默认模板
+        return {
+            "默认模板": {
+                "subject": "关于 {DATE} 的工作汇报",
+                "body": "您好，\n\n这是 {DATE} 的工作汇报，请查收附件。\n\n谢谢！"
+            },
+            "会议通知": {
+                "subject": "会议通知：{主题}",
+                "body": "各位同事：\n\n我们将于 {TIME} 举行会议，请准时参加。\n\n地点：会议室\n议题：{主题}\n\n收到请回复。"
+            }
+        }
+
+    def save_content_templates(self):
+        """保存内容模板"""
+        template_file = "content_templates.json"
+        try:
+            with open(template_file, 'w', encoding='utf-8') as f:
+                json.dump(self.content_templates, f, ensure_ascii=False, indent=2)
+            return True
+        except Exception as e:
+            messagebox.showerror("错误", f"保存模板失败: {str(e)}")
+            return False
+
+    def manage_content_templates(self):
+        """管理内容模板"""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("草稿内容模板管理")
+        dialog.geometry("800x600")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        # 左右布局
+        paned = ttk.PanedWindow(dialog, orient=tk.HORIZONTAL)
+        paned.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # 左侧列表
+        left_frame = ttk.LabelFrame(paned, text="模板列表", padding="5")
+        paned.add(left_frame, weight=1)
+        
+        list_frame = ttk.Frame(left_frame)
+        list_frame.pack(fill=tk.BOTH, expand=True)
+        
+        scrollbar = ttk.Scrollbar(list_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        template_listbox = tk.Listbox(list_frame, yscrollcommand=scrollbar.set, font=('TkDefaultFont', 10))
+        template_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=template_listbox.yview)
+        
+        # 右侧编辑
+        right_frame = ttk.LabelFrame(paned, text="模板内容", padding="5")
+        paned.add(right_frame, weight=2)
+        
+        ttk.Label(right_frame, text="模板名称:").pack(anchor=tk.W)
+        name_var = tk.StringVar()
+        ttk.Entry(right_frame, textvariable=name_var).pack(fill=tk.X, pady=(0, 5))
+        
+        ttk.Label(right_frame, text="主题:").pack(anchor=tk.W)
+        subject_var = tk.StringVar()
+        ttk.Entry(right_frame, textvariable=subject_var).pack(fill=tk.X, pady=(0, 5))
+        
+        ttk.Label(right_frame, text="正文:").pack(anchor=tk.W)
+        body_text = scrolledtext.ScrolledText(right_frame, width=40, height=15, wrap=tk.WORD)
+        body_text.pack(fill=tk.BOTH, expand=True, pady=(0, 5))
+        
+        # 按钮区域
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        def update_list():
+            template_listbox.delete(0, tk.END)
+            for name in sorted(self.content_templates.keys()):
+                template_listbox.insert(tk.END, name)
+        
+        def on_select(event):
+            selection = template_listbox.curselection()
+            if selection:
+                name = template_listbox.get(selection[0])
+                data = self.content_templates.get(name, {})
+                name_var.set(name)
+                subject_var.set(data.get("subject", ""))
+                body_text.delete(1.0, tk.END)
+                body_text.insert(1.0, data.get("body", ""))
+        
+        template_listbox.bind('<<ListboxSelect>>', on_select)
+        
+        def save_template():
+            name = name_var.get().strip()
+            if not name:
+                messagebox.showwarning("警告", "请输入模板名称")
+                return
+            
+            subject = subject_var.get()
+            body = body_text.get(1.0, tk.END).strip() # 保留换行，但去除首尾空白
+            
+            self.content_templates[name] = {
+                "subject": subject,
+                "body": body
+            }
+            if self.save_content_templates():
+                update_list()
+                messagebox.showinfo("成功", "模板已保存")
+        
+        def delete_template():
+            selection = template_listbox.curselection()
+            if not selection:
+                return
+            name = template_listbox.get(selection[0])
+            if messagebox.askyesno("确认", f"确定删除模板 '{name}' 吗？"):
+                del self.content_templates[name]
+                self.save_content_templates()
+                update_list()
+                # 清空右侧
+                name_var.set("")
+                subject_var.set("")
+                body_text.delete(1.0, tk.END)
+        
+        def apply_template():
+            selection = template_listbox.curselection()
+            if not selection:
+                messagebox.showwarning("警告", "请先选择一个模板")
+                return
+            name = template_listbox.get(selection[0])
+            data = self.content_templates.get(name, {})
+            
+            # 应用到主界面
+            if messagebox.askyesno("确认", f"确定要应用模板 '{name}' 吗？\n这将覆盖当前的主题和正文。"):
+                self.subject_var.set(data.get("subject", ""))
+                self.body_text.delete(1.0, tk.END)
+                self.body_text.insert(1.0, data.get("body", ""))
+                dialog.destroy()
+                self.status_var.set(f"已应用模板: {name}")
+
+        def save_current_as_new():
+            # 获取主界面当前内容
+            current_subject = self.subject_var.get()
+            current_body = self.body_text.get(1.0, tk.END).strip()
+            
+            name_var.set("新模板")
+            subject_var.set(current_subject)
+            body_text.delete(1.0, tk.END)
+            body_text.insert(1.0, current_body)
+            messagebox.showinfo("提示", "已获取当前内容，请修改名称后保存")
+
+        # 左侧按钮
+        left_btn_frame = ttk.Frame(left_frame)
+        left_btn_frame.pack(fill=tk.X, pady=5)
+        ttk.Button(left_btn_frame, text="应用选中模板", command=apply_template).pack(fill=tk.X)
+        
+        # 底部按钮
+        ttk.Button(btn_frame, text="从当前内容新建", command=save_current_as_new).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="保存/更新模板", command=save_template).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="删除模板", command=delete_template).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="关闭", command=dialog.destroy).pack(side=tk.RIGHT, padx=5)
+        
+        update_list()
     
     def insert_signature_menu(self):
         """显示插入签名菜单"""

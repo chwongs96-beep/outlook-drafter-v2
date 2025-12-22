@@ -147,6 +147,9 @@ class OutlookDraftManager:
             }
         }
         
+        self.excel_history = []  # Excel 文件历史记录
+        self.default_excel_folder = ""  # 默认 Excel 文件夹
+        
         self.setup_ui()
         self.setup_keyboard_shortcuts()
         self.load_ui_preferences()  # 加载界面偏好设置
@@ -210,8 +213,17 @@ class OutlookDraftManager:
         
         ttk.Label(excel_frame, text="Excel 文件:").grid(row=0, column=0, padx=5, pady=3)
         self.excel_path_var = tk.StringVar()
-        ttk.Entry(excel_frame, textvariable=self.excel_path_var, state="readonly").grid(row=0, column=1, sticky=(tk.W, tk.E), padx=5)
-        ttk.Button(excel_frame, text="选择文件", command=self.select_excel_file).grid(row=0, column=2, padx=5)
+        
+        # 使用 Combobox 替代 Entry 以显示历史记录
+        self.excel_path_combo = ttk.Combobox(excel_frame, textvariable=self.excel_path_var, state="normal")
+        self.excel_path_combo.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=5)
+        self.excel_path_combo.bind("<<ComboboxSelected>>", lambda e: self.load_sheets())
+        
+        # 按钮区域
+        excel_btn_frame = ttk.Frame(excel_frame)
+        excel_btn_frame.grid(row=0, column=2, padx=5)
+        ttk.Button(excel_btn_frame, text="选择文件", command=self.select_excel_file).pack(side=tk.LEFT, padx=2)
+        ttk.Button(excel_btn_frame, text="📂 加载最新", command=self.load_latest_excel_file).pack(side=tk.LEFT, padx=2)
         
         ttk.Label(excel_frame, text="工作表:").grid(row=1, column=0, padx=5, pady=3)
         self.sheet_combo = ttk.Combobox(excel_frame, width=20)
@@ -360,13 +372,14 @@ class OutlookDraftManager:
         
         ttk.Button(button_frame, text="生成预览", command=self.generate_preview).grid(row=0, column=0, padx=5)
         ttk.Button(button_frame, text="👁️ 增强预览", command=self.show_enhanced_preview).grid(row=0, column=1, padx=5)
-        ttk.Button(button_frame, text="创建草稿", command=self.create_draft).grid(row=0, column=2, padx=5)
-        ttk.Button(button_frame, text="⏰ 定时发送", command=self.schedule_send_dialog).grid(row=0, column=3, padx=5)
-        ttk.Button(button_frame, text="批量创建", command=self.batch_create_drafts).grid(row=0, column=4, padx=5)
+        ttk.Button(button_frame, text="🔍 批量预览", command=self.preview_batch_merge).grid(row=0, column=2, padx=5)
+        ttk.Button(button_frame, text="创建草稿", command=self.create_draft).grid(row=0, column=3, padx=5)
+        ttk.Button(button_frame, text="⏰ 定时发送", command=self.schedule_send_dialog).grid(row=0, column=4, padx=5)
+        ttk.Button(button_frame, text="批量创建", command=self.batch_create_drafts).grid(row=0, column=5, padx=5)
         
         # 缩放控制
         zoom_frame = ttk.Frame(button_frame)
-        zoom_frame.grid(row=0, column=5, padx=5)
+        zoom_frame.grid(row=0, column=6, padx=5)
         ttk.Button(zoom_frame, text="🔍−", command=self.zoom_out, width=3).pack(side=tk.LEFT, padx=1)
         self.zoom_label = ttk.Label(zoom_frame, text="100%", width=5)
         self.zoom_label.pack(side=tk.LEFT, padx=2)
@@ -486,6 +499,13 @@ class OutlookDraftManager:
                     prefs = json.load(f)
                     self.ui_scale = prefs.get('ui_scale', 1.0)
                     self.current_language = prefs.get('language', 'zh')
+                    self.excel_history = prefs.get('excel_history', [])
+                    self.default_excel_folder = prefs.get('default_excel_folder', "")
+                    
+                    # 更新历史记录下拉框
+                    if hasattr(self, 'excel_path_combo'):
+                        self.excel_path_combo['values'] = self.excel_history
+                    
                     # 应用缩放
                     if self.ui_scale != 1.0:
                         self.root.after(100, self.apply_zoom)  # 延迟应用，确保界面已加载
@@ -498,10 +518,12 @@ class OutlookDraftManager:
         try:
             prefs = {
                 'ui_scale': self.ui_scale,
-                'language': self.current_language
+                'language': self.current_language,
+                'excel_history': self.excel_history,
+                'default_excel_folder': self.default_excel_folder
             }
             with open(pref_file, 'w', encoding='utf-8') as f:
-                json.dump(prefs, f, indent=2)
+                json.dump(prefs, f, ensure_ascii=False, indent=2)
         except:
             pass
     
@@ -666,11 +688,73 @@ class OutlookDraftManager:
             # 将多个路径用分号连接
             paths_str = ";".join(file_paths)
             self.excel_path_var.set(paths_str)
+            self.add_to_excel_history(paths_str)
             self.load_sheets()
             if len(file_paths) > 1:
                 self.status_var.set(f"已选择 {len(file_paths)} 个文件")
             else:
                 self.status_var.set(f"已选择文件: {os.path.basename(file_paths[0])}")
+                # 更新默认文件夹
+                self.default_excel_folder = os.path.dirname(file_paths[0])
+                self.save_ui_preferences()
+
+    def load_latest_excel_file(self):
+        """加载默认文件夹中最新的Excel文件"""
+        folder = self.default_excel_folder
+        if not folder or not os.path.exists(folder):
+            # 如果没有默认文件夹，尝试从历史记录获取
+            if self.excel_history:
+                folder = os.path.dirname(self.excel_history[0].split(';')[0])
+            else:
+                # 还是没有，就让用户选一个文件夹
+                folder = filedialog.askdirectory(title="选择包含Excel文件的文件夹")
+        
+        if not folder or not os.path.exists(folder):
+            return
+
+        try:
+            # 查找所有xlsx和xls文件
+            files = []
+            for ext in ['*.xlsx', '*.xls']:
+                files.extend(list(Path(folder).glob(ext)))
+            
+            if not files:
+                messagebox.showinfo("提示", "该文件夹中没有Excel文件")
+                return
+            
+            # 按修改时间排序，最新的在前
+            files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+            latest_file = str(files[0])
+            
+            self.excel_path_var.set(latest_file)
+            self.add_to_excel_history(latest_file)
+            self.load_sheets()
+            self.status_var.set(f"已加载最新文件: {os.path.basename(latest_file)}")
+            
+            # 更新默认文件夹
+            self.default_excel_folder = folder
+            self.save_ui_preferences()
+            
+        except Exception as e:
+            messagebox.showerror("错误", f"加载最新文件失败: {str(e)}")
+
+    def add_to_excel_history(self, path):
+        """添加路径到历史记录"""
+        if not path: return
+        
+        if path in self.excel_history:
+            self.excel_history.remove(path)
+        
+        self.excel_history.insert(0, path)
+        # 限制历史记录数量
+        if len(self.excel_history) > 10:
+            self.excel_history = self.excel_history[:10]
+            
+        # 更新下拉列表
+        if hasattr(self, 'excel_path_combo'):
+            self.excel_path_combo['values'] = self.excel_history
+        
+        self.save_ui_preferences()
     
     def load_sheets(self):
         """加载Excel工作表列表"""
@@ -2317,6 +2401,68 @@ class OutlookDraftManager:
             log_message(f"严重错误: {str(e)}", "ERROR")
             messagebox.showerror("错误", f"批量创建失败: {str(e)}")
             progress_window.destroy()
+
+    def preview_batch_merge(self):
+        """预览批量合并效果（显示第一行数据的合并结果）"""
+        if not self.current_excel_data or len(self.current_excel_data) < 2:
+            messagebox.showwarning("警告", "请先读取Excel数据，且数据至少需要2行（表头+数据）")
+            return
+        
+        # 获取第一行数据
+        headers = self.current_excel_data[0]
+        first_row = self.current_excel_data[1]
+        
+        # 创建变量字典
+        variables = {"{" + str(headers[i]) + "}": str(first_row[i]) 
+                    for i in range(min(len(headers), len(first_row)))}
+        
+        # 获取模板
+        subject_template = self.subject_var.get().strip()
+        body_template = self.body_text.get(1.0, tk.END).strip()
+        
+        # 替换变量
+        subject_filled = subject_template
+        body_filled = body_template
+        
+        for placeholder, value in variables.items():
+            subject_filled = subject_filled.replace(placeholder, value)
+            body_filled = body_filled.replace(placeholder, value)
+            
+        # 处理其他变量
+        subject_filled = self.process_template_variables(subject_filled)
+        body_filled = self.process_template_variables(body_filled)
+        
+        # 显示预览窗口
+        preview_win = tk.Toplevel(self.root)
+        preview_win.title("批量合并预览 (第1行数据)")
+        preview_win.geometry("800x600")
+        
+        # 提示信息
+        ttk.Label(preview_win, text="这是使用Excel第一行数据生成的预览效果：", 
+                 font=('TkDefaultFont', 10, 'bold'), foreground='blue').pack(pady=10)
+        
+        # 显示变量映射
+        var_frame = ttk.LabelFrame(preview_win, text="变量映射", padding="5")
+        var_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        var_text = " | ".join([f"{k}={v}" for k, v in list(variables.items())[:5]])
+        if len(variables) > 5:
+            var_text += " ..."
+        ttk.Label(var_frame, text=var_text, font=('TkDefaultFont', 9)).pack(anchor=tk.W)
+        
+        # 预览内容
+        content_frame = ttk.LabelFrame(preview_win, text="邮件内容", padding="10")
+        content_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        
+        ttk.Label(content_frame, text=f"主题: {subject_filled}", font=('TkDefaultFont', 10, 'bold')).pack(anchor=tk.W, pady=(0, 10))
+        ttk.Separator(content_frame, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=(0, 10))
+        
+        text_widget = scrolledtext.ScrolledText(content_frame, wrap=tk.WORD, font=('TkDefaultFont', 10))
+        text_widget.pack(fill=tk.BOTH, expand=True)
+        text_widget.insert(1.0, body_filled)
+        text_widget.config(state='disabled')
+        
+        ttk.Button(preview_win, text="关闭", command=preview_win.destroy).pack(pady=10)
     
     def preview_all_configs(self):
         """预览所有选中的配置"""

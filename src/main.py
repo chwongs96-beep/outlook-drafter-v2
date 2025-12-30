@@ -156,246 +156,214 @@ class OutlookDraftManager:
         self.start_auto_save()
         
     def setup_ui(self):
-        """设置用户界面"""
-        # 主框架 - 使用 PanedWindow 实现左右拖动调整
-        main_container = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
-        main_container.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        """设置用户界面 - 优化版"""
+        # 使用 Notebook 选项卡布局
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
-        self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(0, weight=1)
+        # 创建选项卡
+        self.tab_config = ttk.Frame(self.notebook)
+        self.tab_compose = ttk.Frame(self.notebook)
         
-        # 左侧主编辑区域
-        main_frame = ttk.Frame(main_container, padding="10")
-        main_frame.columnconfigure(1, weight=1)
+        self.notebook.add(self.tab_config, text="⚙️ 设置与数据")
+        self.notebook.add(self.tab_compose, text="✉️ 邮件编辑")
         
-        main_container.add(main_frame, weight=3)  # 左侧占75%
+        # --- Tab 1: 设置与数据 ---
+        self.setup_config_tab()
         
-        # 右侧配置浏览器
-        self.setup_config_browser(main_container)
+        # --- Tab 2: 邮件编辑 ---
+        self.setup_compose_tab()
         
-        # 配置选择区域
-        config_frame = ttk.LabelFrame(main_frame, text="配置管理", padding="5")
-        config_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
-        
-        ttk.Label(config_frame, text="选择配置:").grid(row=0, column=0, padx=5)
-        self.config_combo = ttk.Combobox(config_frame, width=30, state="readonly")
-        self.config_combo.grid(row=0, column=1, padx=5)
-        self.config_combo.bind("<<ComboboxSelected>>", self.load_selected_config)
-        self.update_config_list()
-        
-        ttk.Button(config_frame, text="新建配置", command=self.new_config).grid(row=0, column=2, padx=5)
-        ttk.Button(config_frame, text="保存配置", command=self.save_current_config).grid(row=0, column=3, padx=5)
-        ttk.Button(config_frame, text="删除配置", command=self.delete_config).grid(row=0, column=4, padx=5)
-        ttk.Button(config_frame, text="导出配置", command=self.export_config).grid(row=0, column=5, padx=5)
-        ttk.Button(config_frame, text="导入配置", command=self.import_config).grid(row=0, column=6, padx=5)
-        
-        # 选项：加载配置时是否覆盖Excel路径
-        self.load_excel_path_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(config_frame, text="加载Excel路径", variable=self.load_excel_path_var).grid(row=0, column=7, padx=5)
-        
-        # 配置名称（第二行左侧）
-        ttk.Label(config_frame, text="配置名称:").grid(row=1, column=0, padx=5, pady=5, sticky=tk.E)
-        self.config_name_var = tk.StringVar()
-        ttk.Entry(config_frame, textvariable=self.config_name_var, width=25).grid(row=1, column=1, sticky=tk.W, padx=5, pady=5)
-        
-        # 批量处理按钮（第二行右侧）
-        batch_frame = ttk.Frame(config_frame)
-        batch_frame.grid(row=1, column=2, columnspan=5, pady=5, sticky=tk.E)
-        ttk.Label(batch_frame, text="批量:", font=('TkDefaultFont', 9, 'bold')).pack(side=tk.LEFT, padx=5)
-        ttk.Button(batch_frame, text="📋 选择", command=self.select_multiple_configs).pack(side=tk.LEFT, padx=2)
-        ttk.Button(batch_frame, text="🚀 生成", command=self.batch_create_all_drafts).pack(side=tk.LEFT, padx=2)
-        ttk.Button(batch_frame, text="👁️ 预览", command=self.preview_all_configs).pack(side=tk.LEFT, padx=2)
-        
-        # Excel 文件区域
-        excel_frame = ttk.LabelFrame(main_frame, text="Excel 数据源", padding="5")
-        excel_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
-        excel_frame.columnconfigure(1, weight=1)
-        
-        ttk.Label(excel_frame, text="Excel 文件:").grid(row=0, column=0, padx=5, pady=3)
-        self.excel_path_var = tk.StringVar()
-        
-        # 使用 Combobox 替代 Entry 以显示历史记录
-        self.excel_path_combo = ttk.Combobox(excel_frame, textvariable=self.excel_path_var, state="normal")
-        self.excel_path_combo.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=5)
-        self.excel_path_combo.bind("<<ComboboxSelected>>", lambda e: self.load_sheets())
-        
-        # 按钮区域
-        excel_btn_frame = ttk.Frame(excel_frame)
-        excel_btn_frame.grid(row=0, column=2, padx=5)
-        ttk.Button(excel_btn_frame, text="选择文件", command=self.select_excel_file).pack(side=tk.LEFT, padx=2)
-        ttk.Button(excel_btn_frame, text="📂 加载最新", command=self.load_latest_excel_file).pack(side=tk.LEFT, padx=2)
-        
-        ttk.Label(excel_frame, text="工作表:").grid(row=1, column=0, padx=5, pady=3)
-        self.sheet_combo = ttk.Combobox(excel_frame, width=20)
-        self.sheet_combo.grid(row=1, column=1, sticky=(tk.W), padx=5)
-        self.sheet_combo.bind("<<ComboboxSelected>>", self.on_sheet_selected)
-        
-        ttk.Label(excel_frame, text="数据范围:").grid(row=2, column=0, padx=5, pady=3)
-        range_frame = ttk.Frame(excel_frame)
-        range_frame.grid(row=2, column=1, sticky=(tk.W), padx=5)
-        
-        self.range_var = tk.StringVar(value="A1:C10")
-        ttk.Entry(range_frame, textvariable=self.range_var, width=15).grid(row=0, column=0, padx=5)
-        ttk.Label(range_frame, text="(例如: A1:C10)").grid(row=0, column=1)
-        ttk.Button(range_frame, text="🔍 自动检测", command=self.auto_detect_range).grid(row=0, column=2, padx=5)
-        ttk.Button(range_frame, text="读取数据", command=self.read_excel_data).grid(row=0, column=3, padx=5)
-        ttk.Button(range_frame, text="预览数据", command=self.preview_excel_data).grid(row=0, column=4, padx=5)
-        ttk.Button(range_frame, text="  保留格式粘贴", command=self.paste_with_formatting).grid(row=0, column=5, padx=5)
-        ttk.Button(range_frame, text="🖼️ 粘贴为图片", command=self.paste_as_picture).grid(row=0, column=6, padx=5)
-        
-        # 检测列限制
-        ttk.Label(excel_frame, text="检测列限制:").grid(row=3, column=0, padx=5, pady=3)
-        col_limit_frame = ttk.Frame(excel_frame)
-        col_limit_frame.grid(row=3, column=1, sticky=(tk.W), padx=5)
-        
-        self.col_limit_var = tk.StringVar()
-        ttk.Entry(col_limit_frame, textvariable=self.col_limit_var, width=15).pack(side=tk.LEFT, padx=5)
-        ttk.Label(col_limit_frame, text="(可选, 例: A:C 或 A,C)").pack(side=tk.LEFT)
-        
-        # 邮件内容区域
-        email_frame = ttk.LabelFrame(main_frame, text="邮件内容", padding="5")
-        email_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
-        email_frame.columnconfigure(1, weight=1)
-        email_frame.rowconfigure(4, weight=1)
-        main_frame.rowconfigure(2, weight=1)
-        
-        # 收件人区域（使用列表方式）
-        ttk.Label(email_frame, text="收件人:").grid(row=0, column=0, padx=5, pady=3, sticky=tk.NW)
-        to_frame = ttk.Frame(email_frame)
-        to_frame.grid(row=0, column=1, columnspan=2, sticky=(tk.W, tk.E), padx=5, pady=3)
-        to_frame.columnconfigure(0, weight=1)
-        
-        to_input_frame = ttk.Frame(to_frame)
-        to_input_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E))
-        to_input_frame.columnconfigure(0, weight=1)
-        
-        self.to_entry_var = tk.StringVar()
-        ttk.Entry(to_input_frame, textvariable=self.to_entry_var).grid(row=0, column=0, sticky=(tk.W, tk.E), padx=(0, 5))
-        ttk.Button(to_input_frame, text="添加", command=lambda: self.add_recipient('to')).grid(row=0, column=1, padx=2)
-        ttk.Button(to_input_frame, text="删除", command=lambda: self.remove_recipient('to')).grid(row=0, column=2, padx=2)
-        
-        self.to_listbox = tk.Listbox(to_frame, height=2)
-        self.to_listbox.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(3, 0))
-        
-        # 抄送区域
-        ttk.Label(email_frame, text="抄送 (CC):").grid(row=1, column=0, padx=5, pady=3, sticky=tk.NW)
-        cc_frame = ttk.Frame(email_frame)
-        cc_frame.grid(row=1, column=1, columnspan=2, sticky=(tk.W, tk.E), padx=5, pady=3)
-        cc_frame.columnconfigure(0, weight=1)
-        
-        cc_input_frame = ttk.Frame(cc_frame)
-        cc_input_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E))
-        cc_input_frame.columnconfigure(0, weight=1)
-        
-        self.cc_entry_var = tk.StringVar()
-        ttk.Entry(cc_input_frame, textvariable=self.cc_entry_var).grid(row=0, column=0, sticky=(tk.W, tk.E), padx=(0, 5))
-        ttk.Button(cc_input_frame, text="添加", command=lambda: self.add_recipient('cc')).grid(row=0, column=1, padx=2)
-        ttk.Button(cc_input_frame, text="删除", command=lambda: self.remove_recipient('cc')).grid(row=0, column=2, padx=2)
-        
-        self.cc_listbox = tk.Listbox(cc_frame, height=2)
-        self.cc_listbox.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(3, 0))
-        
-        # 密送区域
-        ttk.Label(email_frame, text="密送 (BCC):").grid(row=2, column=0, padx=5, pady=3, sticky=tk.NW)
-        bcc_frame = ttk.Frame(email_frame)
-        bcc_frame.grid(row=2, column=1, columnspan=2, sticky=(tk.W, tk.E), padx=5, pady=3)
-        bcc_frame.columnconfigure(0, weight=1)
-        
-        bcc_input_frame = ttk.Frame(bcc_frame)
-        bcc_input_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E))
-        bcc_input_frame.columnconfigure(0, weight=1)
-        
-        self.bcc_entry_var = tk.StringVar()
-        ttk.Entry(bcc_input_frame, textvariable=self.bcc_entry_var).grid(row=0, column=0, sticky=(tk.W, tk.E), padx=(0, 5))
-        ttk.Button(bcc_input_frame, text="添加", command=lambda: self.add_recipient('bcc')).grid(row=0, column=1, padx=2)
-        ttk.Button(bcc_input_frame, text="删除", command=lambda: self.remove_recipient('bcc')).grid(row=0, column=2, padx=2)
-        
-        self.bcc_listbox = tk.Listbox(bcc_frame, height=2)
-        self.bcc_listbox.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(3, 0))
-        
-        ttk.Label(email_frame, text="主题:").grid(row=3, column=0, padx=5, pady=3, sticky=tk.W)
-        self.subject_var = tk.StringVar()
-        subject_entry = ttk.Entry(email_frame, textvariable=self.subject_var)
-        subject_entry.grid(row=3, column=1, sticky=(tk.W, tk.E), padx=5, pady=3)
-        ttk.Button(email_frame, text="📋 占位符", command=lambda: self.show_placeholder_menu(subject_entry)).grid(row=3, column=2, padx=5)
-        ttk.Button(email_frame, text="✍️ 签名管理", command=self.manage_signatures).grid(row=3, column=3, padx=5)
-        
-        # 附件区域
-        attachment_subframe = ttk.Frame(email_frame)
-        attachment_subframe.grid(row=4, column=0, columnspan=3, sticky=(tk.W, tk.E), padx=5, pady=3)
-        ttk.Label(attachment_subframe, text="附件:").grid(row=0, column=0, sticky=tk.W)
-        ttk.Button(attachment_subframe, text="添加附件", command=self.add_attachment).grid(row=0, column=1, padx=5)
-        ttk.Button(attachment_subframe, text="➕ Excel文件", command=self.attach_current_excel).grid(row=0, column=2, padx=5)
-        ttk.Button(attachment_subframe, text="删除选中", command=self.remove_selected_attachment).grid(row=0, column=3, padx=5)
-        ttk.Button(attachment_subframe, text="清空附件", command=self.clear_attachments).grid(row=0, column=4, padx=5)
-
-        self.attachment_listbox = tk.Listbox(attachment_subframe, height=3)
-        self.attachment_listbox.grid(row=1, column=0, columnspan=4, sticky=(tk.W, tk.E), pady=3)
-        # 双击打开附件文件（若存在）
-        self.attachment_listbox.bind('<Double-Button-1>', self.open_selected_attachment)
-        attachment_subframe.columnconfigure(0, weight=1)
-        
-        # 自定义占位符快速输入
-        placeholder_quick_frame = ttk.Frame(email_frame)
-        placeholder_quick_frame.grid(row=5, column=0, columnspan=3, sticky=(tk.W, tk.E), padx=5, pady=3)
-        ttk.Label(placeholder_quick_frame, text="📌 自定义占位符:", foreground='blue').pack(side=tk.LEFT, padx=2)
-        ttk.Label(placeholder_quick_frame, text="名称:").pack(side=tk.LEFT, padx=2)
-        self.placeholder_name_var = tk.StringVar()
-        ttk.Entry(placeholder_quick_frame, textvariable=self.placeholder_name_var, width=12).pack(side=tk.LEFT, padx=2)
-        ttk.Label(placeholder_quick_frame, text="值:").pack(side=tk.LEFT, padx=2)
-        self.placeholder_value_var = tk.StringVar()
-        ttk.Entry(placeholder_quick_frame, textvariable=self.placeholder_value_var, width=15).pack(side=tk.LEFT, padx=2)
-        ttk.Button(placeholder_quick_frame, text="➕ 添加", command=self.add_custom_placeholder, width=6).pack(side=tk.LEFT, padx=2)
-        ttk.Button(placeholder_quick_frame, text="📋 管理", command=self.manage_placeholders, width=6).pack(side=tk.LEFT, padx=2)
-        
-        # 正文按钮（触发弹窗编辑）
-        ttk.Label(email_frame, text="正文:").grid(row=6, column=0, padx=5, pady=3, sticky=tk.W)
-        body_button_frame = ttk.Frame(email_frame)
-        body_button_frame.grid(row=6, column=1, columnspan=2, sticky=tk.W, padx=5, pady=3)
-        ttk.Button(body_button_frame, text="  编辑正文", command=self.edit_body_in_window, width=15).pack(side=tk.LEFT, padx=5)
-        ttk.Button(body_button_frame, text="📄 模板管理", command=self.manage_content_templates, width=15).pack(side=tk.LEFT, padx=5)
-        self.body_preview_label = ttk.Label(body_button_frame, text="(点击编辑正文内容)", foreground='gray')
-        self.body_preview_label.pack(side=tk.LEFT, padx=5)
-        
-        # 隐藏的body_text用于存储数据（不显示在界面上）
-        self.body_text = tk.Text(self.root, height=1)  # 创建但不grid，仅用于数据存储
-        
-        # 预览和操作区域
-        preview_frame = ttk.LabelFrame(main_frame, text="邮件预览", padding="5")
-        preview_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
-        preview_frame.columnconfigure(0, weight=1)
-        preview_frame.rowconfigure(1, weight=1)
-        main_frame.rowconfigure(3, weight=1)
-        
-        button_frame = ttk.Frame(preview_frame)
-        button_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=5)
-        
-        ttk.Button(button_frame, text="生成预览", command=self.generate_preview).grid(row=0, column=0, padx=5)
-        ttk.Button(button_frame, text="👁️ 增强预览", command=self.show_enhanced_preview).grid(row=0, column=1, padx=5)
-        ttk.Button(button_frame, text="🔍 批量预览", command=self.preview_batch_merge).grid(row=0, column=2, padx=5)
-        ttk.Button(button_frame, text="创建草稿", command=self.create_draft).grid(row=0, column=3, padx=5)
-        ttk.Button(button_frame, text="⏰ 定时发送", command=self.schedule_send_dialog).grid(row=0, column=4, padx=5)
-        ttk.Button(button_frame, text="批量创建", command=self.batch_create_drafts).grid(row=0, column=5, padx=5)
-        
-        # 缩放控制
-        zoom_frame = ttk.Frame(button_frame)
-        zoom_frame.grid(row=0, column=6, padx=5)
-        ttk.Button(zoom_frame, text="🔍−", command=self.zoom_out, width=3).pack(side=tk.LEFT, padx=1)
-        self.zoom_label = ttk.Label(zoom_frame, text="100%", width=5)
-        self.zoom_label.pack(side=tk.LEFT, padx=2)
-        ttk.Button(zoom_frame, text="🔍+", command=self.zoom_in, width=3).pack(side=tk.LEFT, padx=1)
-        
-        ttk.Button(button_frame, text="🌐 语言", command=self.toggle_language).grid(row=0, column=6, padx=5)
-        
-        # 提示标签（替代固定预览区）
-        info_label = ttk.Label(preview_frame, text="点击'生成预览'或'增强预览'按钮在弹窗中查看邮件内容", 
-                              foreground='gray', font=('TkDefaultFont', 9, 'italic'))
-        info_label.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=5, pady=20)
+        # --- 底部操作栏 ---
+        self.setup_bottom_bar()
         
         # 状态栏
         self.status_var = tk.StringVar(value="就绪 | 快捷键: Ctrl+S=保存配置 | Ctrl+D=创建草稿 | Ctrl+P=预览 | F1=帮助")
-        status_bar = ttk.Label(main_frame, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W)
-        status_bar.grid(row=4, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        status_bar = ttk.Label(self.root, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W)
+        status_bar.pack(side=tk.BOTTOM, fill=tk.X)
+
+    def setup_config_tab(self):
+        """设置配置和数据选项卡"""
+        # 使用 PanedWindow 分割左右 (左: 配置/Excel, 右: 配置浏览器)
+        paned = ttk.PanedWindow(self.tab_config, orient=tk.HORIZONTAL)
+        paned.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        left_frame = ttk.Frame(paned)
+        paned.add(left_frame, weight=3)
+        
+        # 右侧配置浏览器
+        self.setup_config_browser(paned) 
+        
+        # --- 配置管理区域 ---
+        config_frame = ttk.LabelFrame(left_frame, text="配置管理", padding="10")
+        config_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        # 第一行：选择配置
+        row1 = ttk.Frame(config_frame)
+        row1.pack(fill=tk.X, pady=2)
+        ttk.Label(row1, text="选择配置:").pack(side=tk.LEFT)
+        self.config_combo = ttk.Combobox(row1, width=30, state="readonly")
+        self.config_combo.pack(side=tk.LEFT, padx=5)
+        self.config_combo.bind("<<ComboboxSelected>>", self.load_selected_config)
+        self.update_config_list()
+        
+        ttk.Button(row1, text="新建", command=self.new_config).pack(side=tk.LEFT, padx=2)
+        ttk.Button(row1, text="保存", command=self.save_current_config).pack(side=tk.LEFT, padx=2)
+        ttk.Button(row1, text="删除", command=self.delete_config).pack(side=tk.LEFT, padx=2)
+        
+        # 第二行：配置名称与导入导出
+        row2 = ttk.Frame(config_frame)
+        row2.pack(fill=tk.X, pady=2)
+        ttk.Label(row2, text="配置名称:").pack(side=tk.LEFT)
+        self.config_name_var = tk.StringVar()
+        ttk.Entry(row2, textvariable=self.config_name_var, width=25).pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(row2, text="导出", command=self.export_config).pack(side=tk.LEFT, padx=2)
+        ttk.Button(row2, text="导入", command=self.import_config).pack(side=tk.LEFT, padx=2)
+        
+        self.load_excel_path_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(row2, text="加载Excel路径", variable=self.load_excel_path_var).pack(side=tk.LEFT, padx=10)
+
+        # 批量操作
+        batch_frame = ttk.LabelFrame(left_frame, text="批量操作", padding="5")
+        batch_frame.pack(fill=tk.X, padx=5, pady=5)
+        ttk.Button(batch_frame, text="📋 选择多项配置", command=self.select_multiple_configs).pack(side=tk.LEFT, padx=5)
+        ttk.Button(batch_frame, text="🚀 批量生成草稿", command=self.batch_create_all_drafts).pack(side=tk.LEFT, padx=5)
+        ttk.Button(batch_frame, text="👁️ 批量预览", command=self.preview_all_configs).pack(side=tk.LEFT, padx=5)
+        ttk.Button(batch_frame, text="📌 管理占位符", command=self.manage_placeholders).pack(side=tk.LEFT, padx=5)
+
+        # --- Excel 数据源区域 ---
+        excel_frame = ttk.LabelFrame(left_frame, text="Excel 数据源", padding="10")
+        excel_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        # 文件选择
+        f_row = ttk.Frame(excel_frame)
+        f_row.pack(fill=tk.X, pady=2)
+        ttk.Label(f_row, text="Excel文件:").pack(side=tk.LEFT)
+        self.excel_path_var = tk.StringVar()
+        self.excel_path_combo = ttk.Combobox(f_row, textvariable=self.excel_path_var, state="normal", width=40)
+        self.excel_path_combo.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+        self.excel_path_combo.bind("<<ComboboxSelected>>", lambda e: self.load_sheets())
+        ttk.Button(f_row, text="浏览...", command=self.select_excel_file).pack(side=tk.LEFT, padx=2)
+        ttk.Button(f_row, text="加载最新", command=self.load_latest_excel_file).pack(side=tk.LEFT, padx=2)
+        
+        # 动态Excel选项
+        dyn_row = ttk.Frame(excel_frame)
+        dyn_row.pack(fill=tk.X, pady=2)
+        self.prompt_excel_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(dyn_row, text="运行时询问Excel文件 (适用于文件位置经常变动的情况)", 
+                       variable=self.prompt_excel_var).pack(side=tk.LEFT, padx=5)
+        ttk.Button(dyn_row, text="🔍 智能查找", command=self.smart_search_excel).pack(side=tk.LEFT, padx=10)
+        
+        # 工作表与范围
+        s_row = ttk.Frame(excel_frame)
+        s_row.pack(fill=tk.X, pady=2)
+        ttk.Label(s_row, text="工作表:").pack(side=tk.LEFT)
+        self.sheet_combo = ttk.Combobox(s_row, width=15)
+        self.sheet_combo.pack(side=tk.LEFT, padx=5)
+        self.sheet_combo.bind("<<ComboboxSelected>>", self.on_sheet_selected)
+        
+        ttk.Label(s_row, text="范围:").pack(side=tk.LEFT, padx=(10,0))
+        self.range_var = tk.StringVar(value="A1:C10")
+        ttk.Entry(s_row, textvariable=self.range_var, width=10).pack(side=tk.LEFT, padx=5)
+        ttk.Button(s_row, text="自动检测", command=self.auto_detect_range).pack(side=tk.LEFT, padx=2)
+        
+        # 数据操作
+        d_row = ttk.Frame(excel_frame)
+        d_row.pack(fill=tk.X, pady=5)
+        ttk.Button(d_row, text="读取数据", command=self.read_excel_data).pack(side=tk.LEFT, padx=2)
+        ttk.Button(d_row, text="预览数据", command=self.preview_excel_data).pack(side=tk.LEFT, padx=2)
+        ttk.Button(d_row, text="保留格式粘贴", command=self.paste_with_formatting).pack(side=tk.LEFT, padx=2)
+        ttk.Button(d_row, text="粘贴为图片", command=self.paste_as_picture).pack(side=tk.LEFT, padx=2)
+        
+        # 列限制
+        l_row = ttk.Frame(excel_frame)
+        l_row.pack(fill=tk.X, pady=2)
+        ttk.Label(l_row, text="检测列限制:").pack(side=tk.LEFT)
+        self.col_limit_var = tk.StringVar()
+        ttk.Entry(l_row, textvariable=self.col_limit_var, width=15).pack(side=tk.LEFT, padx=5)
+        ttk.Label(l_row, text="(可选, 例: A:C)", foreground="gray").pack(side=tk.LEFT)
+
+    def setup_compose_tab(self):
+        """设置邮件编辑选项卡"""
+        frame = self.tab_compose
+        
+        # 收件人区域
+        recipients_frame = ttk.LabelFrame(frame, text="收件人信息", padding="10")
+        recipients_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        def create_recipient_row(parent, label_text, var):
+            row = ttk.Frame(parent)
+            row.pack(fill=tk.X, pady=2)
+            ttk.Label(row, text=label_text, width=10).pack(side=tk.LEFT)
+            entry = ttk.Entry(row, textvariable=var)
+            entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+            return entry
+
+        self.to_entry_var = tk.StringVar()
+        create_recipient_row(recipients_frame, "收件人:", self.to_entry_var)
+        
+        self.cc_entry_var = tk.StringVar()
+        create_recipient_row(recipients_frame, "抄送:", self.cc_entry_var)
+        
+        self.bcc_entry_var = tk.StringVar()
+        create_recipient_row(recipients_frame, "密送:", self.bcc_entry_var)
+        
+        ttk.Label(recipients_frame, text="提示: 多个邮箱请用分号(;)分隔", foreground="gray", font=("", 8)).pack(anchor=tk.E)
+
+        # 主题
+        subject_frame = ttk.Frame(frame)
+        subject_frame.pack(fill=tk.X, padx=5, pady=5)
+        ttk.Label(subject_frame, text="主题:", width=10).pack(side=tk.LEFT)
+        self.subject_var = tk.StringVar()
+        subject_entry = ttk.Entry(subject_frame, textvariable=self.subject_var)
+        subject_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        ttk.Button(subject_frame, text="插入占位符", command=lambda: self.show_placeholder_menu(subject_entry)).pack(side=tk.LEFT)
+        
+        # 正文
+        body_frame = ttk.LabelFrame(frame, text="邮件正文 (支持HTML)", padding="5")
+        body_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        toolbar = ttk.Frame(body_frame)
+        toolbar.pack(fill=tk.X, pady=2)
+        ttk.Button(toolbar, text="插入占位符", command=lambda: self.show_placeholder_menu(self.body_editor)).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="模板管理", command=self.manage_content_templates).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="签名管理", command=self.manage_signatures).pack(side=tk.LEFT, padx=2)
+        
+        self.body_editor = scrolledtext.ScrolledText(body_frame, height=15)
+        self.body_editor.pack(fill=tk.BOTH, expand=True)
+        # 兼容旧代码
+        self.body_text = self.body_editor
+        
+        # 附件
+        att_frame = ttk.LabelFrame(frame, text="附件", padding="5")
+        att_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        att_btn_row = ttk.Frame(att_frame)
+        att_btn_row.pack(fill=tk.X, pady=2)
+        ttk.Button(att_btn_row, text="添加文件", command=self.add_attachment).pack(side=tk.LEFT, padx=2)
+        ttk.Button(att_btn_row, text="添加当前Excel", command=self.attach_current_excel).pack(side=tk.LEFT, padx=2)
+        ttk.Button(att_btn_row, text="删除选中", command=self.remove_selected_attachment).pack(side=tk.LEFT, padx=2)
+        ttk.Button(att_btn_row, text="清空", command=self.clear_attachments).pack(side=tk.LEFT, padx=2)
+        
+        self.attachment_listbox = tk.Listbox(att_frame, height=3)
+        self.attachment_listbox.pack(fill=tk.X, pady=2)
+        self.attachment_listbox.bind('<Double-Button-1>', self.open_selected_attachment)
+
+    def setup_bottom_bar(self):
+        """底部操作栏"""
+        bar = ttk.Frame(self.root, padding="5")
+        bar.pack(side=tk.BOTTOM, fill=tk.X)
+        
+        left = ttk.Frame(bar)
+        left.pack(side=tk.LEFT)
+        ttk.Button(left, text="生成预览", command=self.generate_preview).pack(side=tk.LEFT, padx=5)
+        ttk.Button(left, text="增强预览", command=self.show_enhanced_preview).pack(side=tk.LEFT, padx=5)
+        
+        right = ttk.Frame(bar)
+        right.pack(side=tk.RIGHT)
+        ttk.Button(right, text="创建草稿 (Ctrl+D)", command=self.create_draft).pack(side=tk.LEFT, padx=5)
+        ttk.Button(right, text="定时发送", command=self.schedule_send_dialog).pack(side=tk.LEFT, padx=5)
     
     def setup_keyboard_shortcuts(self):
         """设置键盘快捷键"""
@@ -545,9 +513,6 @@ class OutlookDraftManager:
         self.range_var.set("A1:C10")
         
         # 清空收件人列表
-        self.to_listbox.delete(0, tk.END)
-        self.cc_listbox.delete(0, tk.END)
-        self.bcc_listbox.delete(0, tk.END)
         self.to_entry_var.set("")
         self.cc_entry_var.set("")
         self.bcc_entry_var.set("")
@@ -567,10 +532,10 @@ class OutlookDraftManager:
             messagebox.showwarning("警告", "请输入配置名称")
             return
         
-        # 从列表框获取所有邮箱
-        to_list = list(self.to_listbox.get(0, tk.END))
-        cc_list = list(self.cc_listbox.get(0, tk.END))
-        bcc_list = list(self.bcc_listbox.get(0, tk.END))
+        # 获取所有邮箱
+        to_list = [x.strip() for x in self.to_entry_var.get().split(';') if x.strip()]
+        cc_list = [x.strip() for x in self.cc_entry_var.get().split(';') if x.strip()]
+        bcc_list = [x.strip() for x in self.bcc_entry_var.get().split(';') if x.strip()]
         
         config_data = {
             "excel_path": self.excel_path_var.get(),
@@ -610,43 +575,23 @@ class OutlookDraftManager:
         self.range_var.set(config.get("data_range", "A1:C10"))
         
         # 加载收件人列表
-        self.to_listbox.delete(0, tk.END)
         to_data = config.get("to", [])
-        # 兼容旧格式（字符串）和新格式（列表）
-        if isinstance(to_data, str):
-            # 旧格式：分号分隔的字符串
-            for email in to_data.split(';'):
-                email = email.strip()
-                if email:
-                    self.to_listbox.insert(tk.END, email)
+        if isinstance(to_data, list):
+            self.to_entry_var.set("; ".join(to_data))
         else:
-            # 新格式：列表
-            for email in to_data:
-                self.to_listbox.insert(tk.END, email)
-        
-        # 加载抄送列表
-        self.cc_listbox.delete(0, tk.END)
+            self.to_entry_var.set(str(to_data))
+            
         cc_data = config.get("cc", [])
-        if isinstance(cc_data, str):
-            for email in cc_data.split(';'):
-                email = email.strip()
-                if email:
-                    self.cc_listbox.insert(tk.END, email)
+        if isinstance(cc_data, list):
+            self.cc_entry_var.set("; ".join(cc_data))
         else:
-            for email in cc_data:
-                self.cc_listbox.insert(tk.END, email)
-        
-        # 加载密送列表
-        self.bcc_listbox.delete(0, tk.END)
+            self.cc_entry_var.set(str(cc_data))
+            
         bcc_data = config.get("bcc", [])
-        if isinstance(bcc_data, str):
-            for email in bcc_data.split(';'):
-                email = email.strip()
-                if email:
-                    self.bcc_listbox.insert(tk.END, email)
+        if isinstance(bcc_data, list):
+            self.bcc_entry_var.set("; ".join(bcc_data))
         else:
-            for email in bcc_data:
-                self.bcc_listbox.insert(tk.END, email)
+            self.bcc_entry_var.set(str(bcc_data))
         
         self.subject_var.set(config.get("subject", ""))
         self.body_text.delete(1.0, tk.END)
@@ -737,6 +682,59 @@ class OutlookDraftManager:
             
         except Exception as e:
             messagebox.showerror("错误", f"加载最新文件失败: {str(e)}")
+
+    def smart_search_excel(self):
+        """智能查找Excel文件"""
+        current_path = self.excel_path_var.get()
+        if not current_path:
+            messagebox.showwarning("提示", "请先在配置中设置一个Excel文件名，以便系统知道要查找哪个文件")
+            return
+            
+        # 获取文件名
+        target_filename = os.path.basename(current_path.split(';')[0])
+        
+        # 选择搜索目录
+        start_dir = self.default_excel_folder if self.default_excel_folder else os.path.expanduser("~")
+        folder = filedialog.askdirectory(title=f"选择包含 '{target_filename}' 的文件夹", initialdir=start_dir)
+        
+        if not folder:
+            return
+            
+        self.status_var.set(f"正在搜索 {target_filename} ...")
+        self.root.update()
+        
+        found_files = []
+        try:
+            # 递归搜索
+            for root, dirs, files in os.walk(folder):
+                if target_filename in files:
+                    found_files.append(os.path.join(root, target_filename))
+            
+            if not found_files:
+                messagebox.showinfo("搜索结果", f"在选定文件夹中未找到 '{target_filename}'")
+                self.status_var.set("未找到文件")
+                return
+            
+            # 如果找到多个，让用户选择（或者默认使用最新的）
+            if len(found_files) > 1:
+                # 按修改时间排序
+                found_files.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+                
+            # 使用找到的第一个（最新的）
+            new_path = found_files[0]
+            self.excel_path_var.set(new_path)
+            self.add_to_excel_history(new_path)
+            self.load_sheets()
+            
+            messagebox.showinfo("成功", f"已找到并加载文件：\n{new_path}")
+            self.status_var.set(f"已加载: {target_filename}")
+            
+            # 更新默认文件夹
+            self.default_excel_folder = folder
+            self.save_ui_preferences()
+            
+        except Exception as e:
+            messagebox.showerror("错误", f"搜索失败: {str(e)}")
 
     def add_to_excel_history(self, path):
         """添加路径到历史记录"""
@@ -1111,10 +1109,10 @@ class OutlookDraftManager:
     
     def generate_preview(self):
         """在弹出窗口中生成邮件预览"""
-        # 从列表框获取邮箱地址
-        to_list = list(self.to_listbox.get(0, tk.END))
-        cc_list = list(self.cc_listbox.get(0, tk.END))
-        bcc_list = list(self.bcc_listbox.get(0, tk.END))
+        # 获取邮箱地址
+        to_list = [x.strip() for x in self.to_entry_var.get().split(';') if x.strip()]
+        cc_list = [x.strip() for x in self.cc_entry_var.get().split(';') if x.strip()]
+        bcc_list = [x.strip() for x in self.bcc_entry_var.get().split(';') if x.strip()]
         
         subject = self.subject_var.get().strip()
         body_template = self.body_text.get(1.0, tk.END).strip()
@@ -1190,10 +1188,10 @@ class OutlookDraftManager:
     
     def create_draft(self):
         """创建Outlook草稿"""
-        # 从列表框获取邮箱地址
-        to_list = list(self.to_listbox.get(0, tk.END))
-        cc_list = list(self.cc_listbox.get(0, tk.END))
-        bcc_list = list(self.bcc_listbox.get(0, tk.END))
+        # 获取邮箱地址
+        to_list = [x.strip() for x in self.to_entry_var.get().split(';') if x.strip()]
+        cc_list = [x.strip() for x in self.cc_entry_var.get().split(';') if x.strip()]
+        bcc_list = [x.strip() for x in self.bcc_entry_var.get().split(';') if x.strip()]
         
         subject = self.subject_var.get().strip()
         body_template = self.body_text.get(1.0, tk.END).strip()
@@ -1768,14 +1766,30 @@ class OutlookDraftManager:
     
     def batch_create_drafts(self):
         """批量创建草稿（为Excel每行创建一封邮件）"""
+        # 检查是否需要动态询问Excel文件
+        if self.prompt_excel_var.get():
+            if messagebox.askyesno("动态Excel模式", "您开启了'运行时询问Excel文件'。\n是否选择新的Excel数据源？"):
+                # 1. 选择文件
+                self.select_excel_file()
+                if not self.excel_path_var.get():
+                    return # 用户取消
+                
+                # 2. 尝试自动检测并读取
+                # 如果sheet名为空，默认选第一个
+                if not self.sheet_combo.get() and self.sheet_combo['values']:
+                    self.sheet_combo.current(0)
+                
+                # 尝试读取数据
+                self.read_excel_data()
+        
         if not self.current_excel_data or len(self.current_excel_data) < 2:
             messagebox.showwarning("警告", "请先读取Excel数据，且数据至少需要2行（表头+数据）")
             return
         
         # 从列表框获取邮箱地址
-        to_list = list(self.to_listbox.get(0, tk.END))
-        cc_list = list(self.cc_listbox.get(0, tk.END))
-        bcc_list = list(self.bcc_listbox.get(0, tk.END))
+        to_list = [x.strip() for x in self.to_entry_var.get().split(';') if x.strip()]
+        cc_list = [x.strip() for x in self.cc_entry_var.get().split(';') if x.strip()]
+        bcc_list = [x.strip() for x in self.bcc_entry_var.get().split(';') if x.strip()]
         
         subject_template = self.subject_var.get().strip()
         body_template = self.body_text.get(1.0, tk.END).strip()
@@ -1817,6 +1831,9 @@ class OutlookDraftManager:
                 # 创建变量字典
                 variables = {"{" + str(headers[i]) + "}": str(row_data[i]) 
                             for i in range(min(len(headers), len(row_data)))}
+                
+                # 添加自定义占位符
+                variables.update(self.custom_placeholders)
                 
                 # 替换主题和正文中的变量
                 subject_filled = subject_template
@@ -3083,62 +3100,131 @@ class OutlookDraftManager:
             messagebox.showinfo("成功", "已清空所有自定义占位符")
     
     def manage_placeholders(self):
-        """打开占位符管理窗口"""
+        """打开占位符管理窗口 - 增强版"""
         dialog = tk.Toplevel(self.root)
         dialog.title("占位符管理")
-        dialog.geometry("500x400")
+        dialog.geometry("600x500")
         dialog.transient(self.root)
         dialog.grab_set()
         
         # 说明文本
-        ttk.Label(dialog, text="在主题或正文中使用 {占位符名} 格式，系统会自动替换为设定的值", 
-                 font=('TkDefaultFont', 9), foreground='blue').pack(pady=10, padx=10)
+        ttk.Label(dialog, text="管理自定义占位符 (可在主题或正文中使用 {占位符名})", 
+                 font=('TkDefaultFont', 10, 'bold')).pack(pady=(10, 5), padx=10)
         
-        # 已定义的占位符列表
-        list_frame = ttk.LabelFrame(dialog, text="已定义的占位符", padding="10")
+        # 列表区域
+        list_frame = ttk.Frame(dialog)
         list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
         
-        # 添加滚动条
-        scrollbar = ttk.Scrollbar(list_frame)
+        # Treeview
+        columns = ("name", "value")
+        self.ph_tree = ttk.Treeview(list_frame, columns=columns, show="headings", selectmode="extended")
+        self.ph_tree.heading("name", text="占位符名称")
+        self.ph_tree.heading("value", text="替换值")
+        self.ph_tree.column("name", width=150)
+        self.ph_tree.column("value", width=300)
+        
+        scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.ph_tree.yview)
+        self.ph_tree.configure(yscrollcommand=scrollbar.set)
+        
+        self.ph_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
-        self.placeholder_listbox_manage = tk.Listbox(list_frame, yscrollcommand=scrollbar.set, font=('Courier New', 10))
-        self.placeholder_listbox_manage.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.config(command=self.placeholder_listbox_manage.yview)
+        self.update_placeholder_tree()
         
-        self.update_placeholder_listbox()
+        # 编辑区域
+        edit_frame = ttk.LabelFrame(dialog, text="编辑/添加", padding="10")
+        edit_frame.pack(fill=tk.X, padx=10, pady=5)
         
-        # 按钮区域
-        btn_frame = ttk.Frame(dialog)
-        btn_frame.pack(pady=10)
+        ttk.Label(edit_frame, text="名称:").grid(row=0, column=0, padx=5)
+        name_var = tk.StringVar()
+        name_entry = ttk.Entry(edit_frame, textvariable=name_var, width=20)
+        name_entry.grid(row=0, column=1, padx=5)
         
-        ttk.Button(btn_frame, text="❌ 删除选中", command=self.remove_custom_placeholder).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="🗑️ 清空全部", command=self.clear_custom_placeholders).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="关闭", command=dialog.destroy).pack(side=tk.LEFT, padx=5)
+        ttk.Label(edit_frame, text="值:").grid(row=0, column=2, padx=5)
+        value_var = tk.StringVar()
+        value_entry = ttk.Entry(edit_frame, textvariable=value_var, width=30)
+        value_entry.grid(row=0, column=3, padx=5)
         
-        # 使用说明
-        help_frame = ttk.LabelFrame(dialog, text="使用说明", padding="10")
-        help_frame.pack(fill=tk.X, padx=10, pady=5)
+        def on_select(event):
+            selected_items = self.ph_tree.selection()
+            if selected_items:
+                item = self.ph_tree.item(selected_items[0])
+                name_var.set(item['values'][0])
+                value_var.set(item['values'][1])
         
-        help_text = """• 系统内置占位符: {DATE}, {TIME}, {DATETIME}, {EXCEL_DATA}
-• Excel 列占位符: {列名} (如 {姓名}, {邮箱})
-• 自定义占位符: 您添加的占位符 (如 {公司名}, {部门})
-• 在主题或正文中使用这些占位符，创建草稿时会自动替换"""
+        self.ph_tree.bind("<<TreeviewSelect>>", on_select)
         
-        ttk.Label(help_frame, text=help_text, font=('TkDefaultFont', 8), justify=tk.LEFT).pack()
-    
-    def update_placeholder_listbox(self):
-        """更新占位符列表显示"""
-        if hasattr(self, 'placeholder_listbox_manage'):
-            self.placeholder_listbox_manage.delete(0, tk.END)
+        def save_item():
+            name = name_var.get().strip()
+            value = value_var.get().strip()
+            if not name:
+                messagebox.showwarning("警告", "请输入占位符名称")
+                return
+            # 移除可能的大括号
+            name = name.replace("{", "").replace("}", "")
+            self.custom_placeholders[name] = value
+            self.update_placeholder_tree()
+            name_var.set("")
+            value_var.set("")
             
-            if not self.custom_placeholders:
-                self.placeholder_listbox_manage.insert(tk.END, "（暂无自定义占位符）")
-            else:
-                for name, value in self.custom_placeholders.items():
-                    # 格式化显示: {占位符名} = 值
-                    display = f"{{{name}}}  =  {value}"
-                    self.placeholder_listbox_manage.insert(tk.END, display)
+        def delete_item():
+            selected_items = self.ph_tree.selection()
+            if not selected_items:
+                return
+            if messagebox.askyesno("确认", "确定删除选中的占位符吗？"):
+                for item_id in selected_items:
+                    item = self.ph_tree.item(item_id)
+                    name = item['values'][0]
+                    if name in self.custom_placeholders:
+                        del self.custom_placeholders[name]
+                self.update_placeholder_tree()
+        
+        def batch_edit():
+            """批量编辑窗口"""
+            batch_win = tk.Toplevel(dialog)
+            batch_win.title("批量编辑占位符")
+            batch_win.geometry("500x400")
+            
+            ttk.Label(batch_win, text="请输入JSON格式 (例如: {\"公司\": \"ABC\", \"年份\": \"2025\"})").pack(pady=5)
+            text_area = scrolledtext.ScrolledText(batch_win, width=60, height=15)
+            text_area.pack(padx=10, pady=5)
+            
+            # 预填当前数据
+            import json
+            text_area.insert(1.0, json.dumps(self.custom_placeholders, ensure_ascii=False, indent=2))
+            
+            def apply_batch():
+                try:
+                    content = text_area.get(1.0, tk.END).strip()
+                    new_data = json.loads(content)
+                    if isinstance(new_data, dict):
+                        self.custom_placeholders.update(new_data)
+                        self.update_placeholder_tree()
+                        batch_win.destroy()
+                        messagebox.showinfo("成功", "批量更新成功")
+                    else:
+                        messagebox.showerror("错误", "必须是JSON对象格式")
+                except Exception as e:
+                    messagebox.showerror("错误", f"解析JSON失败: {e}")
+            
+            ttk.Button(batch_win, text="应用更改", command=apply_batch).pack(pady=10)
+
+        btn_frame = ttk.Frame(edit_frame)
+        btn_frame.grid(row=1, column=0, columnspan=4, pady=10)
+        
+        ttk.Button(btn_frame, text="💾 保存/更新", command=save_item).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="❌ 删除选中", command=delete_item).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="📝 批量编辑(JSON)", command=batch_edit).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="关闭", command=dialog.destroy).pack(side=tk.LEFT, padx=5)
+
+    def update_placeholder_tree(self):
+        """更新占位符Treeview"""
+        if hasattr(self, 'ph_tree'):
+            for item in self.ph_tree.get_children():
+                self.ph_tree.delete(item)
+            
+            for name, value in self.custom_placeholders.items():
+                self.ph_tree.insert('', tk.END, values=(name, value))
     
     def load_signatures(self):
         """加载邮件签名"""

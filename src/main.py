@@ -5,7 +5,7 @@ Outlook 草稿邮件管理器 - 增强版
 """
 
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, scrolledtext
+from tkinter import ttk, filedialog, messagebox, scrolledtext, simpledialog
 import json
 import os
 import win32com.client
@@ -27,6 +27,64 @@ import tempfile
 import uuid
 import threading
 import time
+
+
+class ToolTip:
+    """控件悬停提示工具类"""
+    def __init__(self, widget, text):
+        self.widget = widget
+        self.text = text
+        self.tip_window = None
+        self.id = None
+        self.x = self.y = 0
+        
+        self.widget.bind("<Enter>", self.enter)
+        self.widget.bind("<Leave>", self.leave)
+        self.widget.bind("<ButtonPress>", self.leave)
+        
+    def enter(self, event=None):
+        self.schedule()
+        
+    def leave(self, event=None):
+        self.unschedule()
+        self.hidetip()
+        
+    def schedule(self):
+        self.unschedule()
+        self.id = self.widget.after(500, self.showtip)
+        
+    def unschedule(self):
+        id = self.id
+        self.id = None
+        if id:
+            self.widget.after_cancel(id)
+            
+    def showtip(self, event=None):
+        try:
+            x = y = 0
+            x, y, cx, cy = self.widget.bbox("insert") # 对于Entry等控件获取光标位置
+            x += self.widget.winfo_rootx() + 25
+            y += self.widget.winfo_rooty() + 20
+        except:
+            # 对于Button等没有insert的控件
+            x = self.widget.winfo_rootx() + 20
+            y = self.widget.winfo_rooty() + self.widget.winfo_height() + 5
+        
+        # 创建提示窗口
+        self.tip_window = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry("+%d+%d" % (x, y))
+        
+        label = tk.Label(tw, text=self.text, justify=tk.LEFT,
+                       background="#ffffe0", relief=tk.SOLID, borderwidth=1,
+                       font=("Microsoft YaHei UI", "9", "normal"))
+        label.pack(ipadx=2, ipady=1)
+        
+    def hidetip(self):
+        tw = self.tip_window
+        self.tip_window = None
+        if tw:
+            tw.destroy()
 
 
 class OutlookDraftManager:
@@ -227,11 +285,19 @@ class OutlookDraftManager:
         # 批量操作
         batch_frame = ttk.LabelFrame(left_frame, text="批量操作", padding="5")
         batch_frame.pack(fill=tk.X, padx=5, pady=5)
-        ttk.Button(batch_frame, text="📋 选择多项配置", command=self.select_multiple_configs).pack(side=tk.LEFT, padx=5)
-        ttk.Button(batch_frame, text="🚀 批量生成草稿", command=self.batch_create_all_drafts).pack(side=tk.LEFT, padx=5)
-        ttk.Button(batch_frame, text="👁️ 批量预览", command=self.preview_all_configs).pack(side=tk.LEFT, padx=5)
-        ttk.Button(batch_frame, text="📌 管理占位符", command=self.manage_placeholders).pack(side=tk.LEFT, padx=5)
-
+        
+        btn_sel_multi = ttk.Button(batch_frame, text="📋 选择多项配置", command=self.select_multiple_configs)
+        btn_sel_multi.pack(side=tk.LEFT, padx=5)
+        ToolTip(btn_sel_multi, "勾选多个配置方案，一次性批量执行")
+        
+        btn_batch_run = ttk.Button(batch_frame, text="🚀 批量生成草稿", command=self.batch_create_all_drafts)
+        btn_batch_run.pack(side=tk.LEFT, padx=5)
+        ToolTip(btn_batch_run, "开始批量生成任务 (基于勾选的配置)")
+        
+        btn_batch_prev = ttk.Button(batch_frame, text="👁️ 批量预览", command=self.preview_all_configs)
+        btn_batch_prev.pack(side=tk.LEFT, padx=5)
+        ToolTip(btn_batch_prev, "检查所有选定配置的预览效果")
+        
         # --- Excel 数据源区域 ---
         excel_frame = ttk.LabelFrame(left_frame, text="Excel 数据源", padding="10")
         excel_frame.pack(fill=tk.X, padx=5, pady=5)
@@ -244,16 +310,28 @@ class OutlookDraftManager:
         self.excel_path_combo = ttk.Combobox(f_row, textvariable=self.excel_path_var, state="normal", width=40)
         self.excel_path_combo.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
         self.excel_path_combo.bind("<<ComboboxSelected>>", lambda e: self.load_sheets())
-        ttk.Button(f_row, text="浏览...", command=self.select_excel_file).pack(side=tk.LEFT, padx=2)
-        ttk.Button(f_row, text="加载最新", command=self.load_latest_excel_file).pack(side=tk.LEFT, padx=2)
+        ToolTip(self.excel_path_combo, "输入或选择Excel文件路径")
+        
+        btn_browse = ttk.Button(f_row, text="浏览...", command=self.select_excel_file)
+        btn_browse.pack(side=tk.LEFT, padx=2)
+        ToolTip(btn_browse, "打开文件选择对话框")
+        
+        btn_latest = ttk.Button(f_row, text="加载最新", command=self.load_latest_excel_file)
+        btn_latest.pack(side=tk.LEFT, padx=2)
+        ToolTip(btn_latest, "自动加载包含'出货计划'或其他关键词的最新Excel文件")
         
         # 动态Excel选项
         dyn_row = ttk.Frame(excel_frame)
         dyn_row.pack(fill=tk.X, pady=2)
         self.prompt_excel_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(dyn_row, text="运行时询问Excel文件 (适用于文件位置经常变动的情况)", 
-                       variable=self.prompt_excel_var).pack(side=tk.LEFT, padx=5)
-        ttk.Button(dyn_row, text="🔍 智能查找", command=self.smart_search_excel).pack(side=tk.LEFT, padx=10)
+        chk_prompt = ttk.Checkbutton(dyn_row, text="运行时询问Excel文件 (适用于文件位置经常变动的情况)", 
+                       variable=self.prompt_excel_var)
+        chk_prompt.pack(side=tk.LEFT, padx=5)
+        ToolTip(chk_prompt, "勾选后，每次生成草稿时都会弹窗询问使用哪个Excel文件")
+        
+        btn_smart = ttk.Button(dyn_row, text="🔍 智能查找", command=self.smart_search_excel)
+        btn_smart.pack(side=tk.LEFT, padx=10)
+        ToolTip(btn_smart, "配置智能查找规则，根据日期自动匹配文件名")
         
         # 工作表与范围
         s_row = ttk.Frame(excel_frame)
@@ -284,6 +362,12 @@ class OutlookDraftManager:
         ttk.Entry(l_row, textvariable=self.col_limit_var, width=15).pack(side=tk.LEFT, padx=5)
         ttk.Label(l_row, text="(可选, 例: A:C)", foreground="gray").pack(side=tk.LEFT)
 
+        # 占位符应用（应用户要求加入第一页底部）
+        ph_frame = ttk.LabelFrame(left_frame, text="占位符应用", padding="5")
+        ph_frame.pack(fill=tk.X, padx=5, pady=5)
+        ttk.Button(ph_frame, text="📌 管理占位符", command=self.manage_placeholders).pack(side=tk.LEFT, padx=5)
+        ttk.Label(ph_frame, text="可在所有场景（主题、正文、收件人）使用", foreground="gray", font=('TkDefaultFont', 8)).pack(side=tk.LEFT, padx=5)
+
     def setup_compose_tab(self):
         """设置邮件编辑选项卡"""
         frame = self.tab_compose
@@ -298,6 +382,9 @@ class OutlookDraftManager:
             ttk.Label(row, text=label_text, width=10).pack(side=tk.LEFT)
             entry = ttk.Entry(row, textvariable=var)
             entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+            # 添加 "+" 按钮用于插入占位符
+            ttk.Button(row, text="+", width=3,
+                     command=lambda: self.show_placeholder_menu(entry, is_recipient=True)).pack(side=tk.LEFT)
             return entry
 
         self.to_entry_var = tk.StringVar()
@@ -336,15 +423,40 @@ class OutlookDraftManager:
         self.body_text = self.body_editor
         
         # 附件
-        att_frame = ttk.LabelFrame(frame, text="附件", padding="5")
+        att_frame = ttk.LabelFrame(frame, text="附件 & 发送选项", padding="5")
         att_frame.pack(fill=tk.X, padx=5, pady=5)
         
         att_btn_row = ttk.Frame(att_frame)
         att_btn_row.pack(fill=tk.X, pady=2)
-        ttk.Button(att_btn_row, text="添加文件", command=self.add_attachment).pack(side=tk.LEFT, padx=2)
-        ttk.Button(att_btn_row, text="添加当前Excel", command=self.attach_current_excel).pack(side=tk.LEFT, padx=2)
-        ttk.Button(att_btn_row, text="删除选中", command=self.remove_selected_attachment).pack(side=tk.LEFT, padx=2)
-        ttk.Button(att_btn_row, text="清空", command=self.clear_attachments).pack(side=tk.LEFT, padx=2)
+        
+        # 附件按钮（增加Tooltip）
+        btn_add = ttk.Button(att_btn_row, text="添加文件", command=self.add_attachment)
+        btn_add.pack(side=tk.LEFT, padx=2)
+        ToolTip(btn_add, "从电脑中选择文件作为附件")
+        
+        btn_excel = ttk.Button(att_btn_row, text="添加当前Excel", command=self.attach_current_excel)
+        btn_excel.pack(side=tk.LEFT, padx=2)
+        ToolTip(btn_excel, "将当前加载的Excel源文件作为附件")
+        
+        btn_del = ttk.Button(att_btn_row, text="删除选中", command=self.remove_selected_attachment)
+        btn_del.pack(side=tk.LEFT, padx=2)
+        
+        btn_clear = ttk.Button(att_btn_row, text="清空", command=self.clear_attachments)
+        btn_clear.pack(side=tk.LEFT, padx=2)
+        
+        # 发送选项
+        opt_frame = ttk.Frame(att_frame)
+        opt_frame.pack(fill=tk.X, pady=5)
+        
+        self.priority_var = tk.BooleanVar(value=False)
+        chk_prio = ttk.Checkbutton(opt_frame, text="🔥 高优先级", variable=self.priority_var)
+        chk_prio.pack(side=tk.LEFT, padx=10)
+        ToolTip(chk_prio, "标记邮件为高重要性 (High Importance)")
+        
+        self.receipt_var = tk.BooleanVar(value=False)
+        chk_receipt = ttk.Checkbutton(opt_frame, text="📫 已读回执", variable=self.receipt_var)
+        chk_receipt.pack(side=tk.LEFT, padx=10)
+        ToolTip(chk_receipt, "请求对方阅读后的回执 (Read Receipt)")
         
         self.attachment_listbox = tk.Listbox(att_frame, height=3)
         self.attachment_listbox.pack(fill=tk.X, pady=2)
@@ -547,7 +659,10 @@ class OutlookDraftManager:
             "subject": self.subject_var.get(),
             "body": self.body_text.get(1.0, tk.END).strip(),
             "attachments": self.attachments.copy(),
-            "custom_placeholders": self.custom_placeholders.copy()  # 保存自定义占位符
+            "inline_images": self.inline_images.copy() if hasattr(self, 'inline_images') else [], # 保存内嵌图片信息
+            "custom_placeholders": self.custom_placeholders.copy(),  # 保存自定义占位符
+            "high_priority": self.priority_var.get(), # 保存优先级
+            "read_receipt": self.receipt_var.get()    # 保存已读回执
         }
         
         self.configs[config_name] = config_data
@@ -597,7 +712,12 @@ class OutlookDraftManager:
         self.body_text.delete(1.0, tk.END)
         self.body_text.insert(1.0, config.get("body", ""))
         self.attachments = config.get("attachments", [])
+        self.inline_images = config.get("inline_images", []) # 加载内嵌图片信息
         self.update_attachment_list()
+        
+        # 加载发送选项
+        self.priority_var.set(config.get("high_priority", False))
+        self.receipt_var.set(config.get("read_receipt", False))
         
         # 加载自定义占位符
         self.custom_placeholders = config.get("custom_placeholders", {}).copy()
@@ -1217,6 +1337,13 @@ class OutlookDraftManager:
                 mail.CC = "; ".join(cc_list)
             if bcc_list:
                 mail.BCC = "; ".join(bcc_list)
+            
+            # 设置优先级和已读回执
+            if self.priority_var.get():
+                mail.Importance = 2  # 2 = olImportanceHigh
+            
+            if self.receipt_var.get():
+                mail.ReadReceiptRequested = True
             
             # 设置主题
             subject_processed = self.process_template_variables(subject)
@@ -2251,6 +2378,7 @@ class OutlookDraftManager:
                     subject = config.get('subject', '').strip()
                     body = config.get('body', '').strip()
                     attachments = config.get('attachments', [])
+                    inline_images_config = config.get('inline_images', []) # 获取配置中的内嵌图片
                     
                     # 检查必填字段
                     if not to_list:
@@ -2335,6 +2463,13 @@ class OutlookDraftManager:
                                 mail.CC = "; ".join(cc_list)
                             if bcc_list:
                                 mail.BCC = "; ".join(bcc_list)
+                            
+                            # 应用发送选项
+                            if config.get("high_priority", False):
+                                mail.Importance = 2
+                            if config.get("read_receipt", False):
+                                mail.ReadReceiptRequested = True
+                                
                             mail.Subject = subject_filled
                             mail.HTMLBody = body_filled.replace("\n", "<br>")
                             
@@ -2342,65 +2477,89 @@ class OutlookDraftManager:
                                 if os.path.exists(att_path):
                                     mail.Attachments.Add(att_path)
                             
+                            # 添加内嵌图片 (来自粘贴图片)
+                            if inline_images_config:
+                                for img in inline_images_config:
+                                    path = img.get('path')
+                                    cid = img.get('cid')
+                                    if path and cid and os.path.exists(path):
+                                        try:
+                                            att = mail.Attachments.Add(path)
+                                            # PR_ATTACH_CONTENT_ID (0x3712001F) 指定附件的 Content-ID
+                                            att.PropertyAccessor.SetProperty("http://schemas.microsoft.com/mapi/proptag/0x3712001F", cid)
+                                        except:
+                                            pass
+
                             mail.Save()
                             draft_count += 1
                         
-                        log_message(f"  ✓ 批量创建完成 ({draft_count} 封草稿)", "SUCCESS")
-                        success_count += draft_count
-                    else:
-                        # 单邮件模式
-                        mail = outlook.CreateItem(0)
-                        mail.To = "; ".join(to_list)
-                        if cc_list:
-                            mail.CC = "; ".join(cc_list)
-                        if bcc_list:
-                            mail.BCC = "; ".join(bcc_list)
-                        
-                        # 处理主题占位符
-                        subject_processed = subject.replace("{DATE}", datetime.now().strftime("%Y-%m-%d"))
-                        # 替换自定义占位符
-                        for name, value in self.custom_placeholders.items():
-                            subject_processed = subject_processed.replace("{" + name + "}", str(value))
-                        mail.Subject = subject_processed
-                        
-                        body_html = body
-                        if excel_data:
-                            # 格式化Excel数据为表格
-                            table_html = "<table border='1' cellpadding='5' cellspacing='0' style='border-collapse: collapse;'>\n"
-                            for i, row in enumerate(excel_data):
-                                table_html += "  <tr>\n"
-                                for cell in row:
-                                    cell_value = str(cell) if cell else ""
-                                    if i == 0:
-                                        table_html += f"    <th style='background-color: #4472C4; color: white;'>{cell_value}</th>\n"
-                                    else:
-                                        table_html += f"    <td>{cell_value}</td>\n"
-                                table_html += "  </tr>\n"
-                            table_html += "</table>"
-                            body_html = body_html.replace("{EXCEL_DATA}", table_html)
-                        
-                        # 处理正文占位符
-                        body_html = body_html.replace("{DATE}", datetime.now().strftime("%Y-%m-%d"))
-                        body_html = body_html.replace("{TIME}", datetime.now().strftime("%H:%M:%S"))
-                        # 替换自定义占位符
-                        for name, value in self.custom_placeholders.items():
-                            body_html = body_html.replace("{" + name + "}", str(value))
-                        body_html = body_html.replace("\n", "<br>")
-                        mail.HTMLBody = body_html
-                        
-                        for att_path in attachments:
-                            if os.path.exists(att_path):
-                                mail.Attachments.Add(att_path)
-                        
-                        mail.Save()
-                        log_message(f"  ✓ 草稿已创建", "SUCCESS")
+                        log_message(f"  ✓ 成功批量生成 {draft_count} 封草稿")
                         success_count += 1
                     
+                    # 单封模式（普通模式/非批量数据）
+                    else:
+                        # 创建单封邮件
+                        mail = outlook.CreateItem(0)
+                        
+                        # 替换变量（仅自定义变量和日期时间）
+                        subject_filled = subject
+                        body_filled = body
+                        
+                        # 自定义占位符替换
+                        custom_vars = config.get("custom_placeholders", {})
+                        for name, value in custom_vars.items():
+                            placeholder = "{" + name + "}"
+                            subject_filled = subject_filled.replace(placeholder, str(value))
+                            body_filled = body_filled.replace(placeholder, str(value))
+                            
+                        # 常规变量替换
+                        subject_filled = subject_filled.replace("{DATE}", datetime.now().strftime("%Y-%m-%d"))
+                        body_filled = body_filled.replace("{DATE}", datetime.now().strftime("%Y-%m-%d"))
+                        
+                        mail.To = "; ".join(to_list)
+                        if cc_list:
+                             mail.CC = "; ".join(cc_list)
+                        if bcc_list:
+                             mail.BCC = "; ".join(bcc_list)
+                        
+                        # 应用发送选项
+                        if config.get("high_priority", False):
+                            mail.Importance = 2
+                        if config.get("read_receipt", False):
+                            mail.ReadReceiptRequested = True
+                        
+                        mail.Subject = subject_filled
+                        mail.HTMLBody = body_filled.replace("\n", "<br>")
+                        
+                        # 添加附件
+                        for attachment_path in attachments:
+                            if os.path.exists(attachment_path):
+                                mail.Attachments.Add(attachment_path)
+                                
+                        # 添加内嵌图片 (来自粘贴图片)
+                        if inline_images_config:
+                            for img in inline_images_config:
+                                path = img.get('path')
+                                cid = img.get('cid')
+                                if path and cid and os.path.exists(path):
+                                    try:
+                                        att = mail.Attachments.Add(path)
+                                        att.PropertyAccessor.SetProperty("http://schemas.microsoft.com/mapi/proptag/0x3712001F", cid)
+                                    except:
+                                        pass
+                        
+                        mail.Save()
+                        success_count += 1
+                        log_message(f"  ✓ 成功创建单封草稿")
+
                 except Exception as e:
-                    log_message(f"  ✗ 处理失败: {str(e)}", "ERROR")
+                    log_message(f"  ❌ 处理失败: {str(e)}", "ERROR")
                     error_count += 1
-                
-                progress_window.update()
+                    import traceback
+                    print(traceback.format_exc())
+            
+            progress_bar['value'] = total
+            status_label.config(text="完成")
             
             # 完成
             progress_label.config(text="✓ 批量处理完成！")
@@ -2747,9 +2906,89 @@ class OutlookDraftManager:
         for index in reversed(selection):
             listbox.delete(index)
     
-    def show_placeholder_menu(self, entry_widget):
-        """显示占位符菜单（用于主题）"""
+    def add_manual_email_dialog(self, entry_widget):
+        """弹出高级对话框编辑/添加邮箱（支持多行粘贴）"""
+        # 创建弹窗
+        dialog = tk.Toplevel(self.root)
+        dialog.title("批量编辑/添加收件人")
+        dialog.geometry("500x400")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        # 居中显示
+        dialog.update_idletasks()
+        width = dialog.winfo_width()
+        height = dialog.winfo_height()
+        x = (dialog.winfo_screenwidth() // 2) - (width // 2)
+        y = (dialog.winfo_screenheight() // 2) - (height // 2)
+        dialog.geometry('{}x{}+{}+{}'.format(width, height, x, y))
+        
+        # 说明
+        instruction_frame = ttk.Frame(dialog, padding="10 10 10 5")
+        instruction_frame.pack(fill=tk.X)
+        ttk.Label(instruction_frame, text="在此处输入或粘贴邮箱地址:", font=('TkDefaultFont', 10, 'bold')).pack(anchor=tk.W)
+        ttk.Label(instruction_frame, text="• 每行一个地址，或使用分号/逗号分隔\n• 支持直接从Excel列复制粘贴", 
+                 foreground="gray").pack(anchor=tk.W, pady=(2, 0))
+        
+        # 文本框
+        text_frame = ttk.Frame(dialog, padding="10 0 10 5")
+        text_frame.pack(fill=tk.BOTH, expand=True)
+        text_area = scrolledtext.ScrolledText(text_frame, width=50, height=10)
+        text_area.pack(fill=tk.BOTH, expand=True)
+        
+        # 加载现有内容
+        current_text = entry_widget.get().strip()
+        if current_text:
+            # 智能分割：尝试分号、逗号、换行
+            raw_items = re.split(r'[;,\n]', current_text)
+            # 清理空白项并去重(保持顺序)
+            clean_items = []
+            seen = set()
+            for item in raw_items:
+                i = item.strip()
+                if i and i not in seen:
+                    clean_items.append(i)
+                    seen.add(i)
+            
+            text_area.insert(1.0, "\n".join(clean_items))
+        
+        # 按钮区域
+        btn_frame = ttk.Frame(dialog, padding="10")
+        btn_frame.pack(fill=tk.X, side=tk.BOTTOM)
+        
+        def save():
+            content = text_area.get(1.0, tk.END).strip()
+            if content:
+                # 统一分隔符处理
+                # 1. 替换中文分号和逗号
+                content = content.replace("；", ";").replace("，", ";").replace(",", ";")
+                # 2. 按行和分号分割
+                raw_lines = re.split(r'[;\n]', content)
+                # 3. 清理和重建
+                final_emails = [line.strip() for line in raw_lines if line.strip()]
+                
+                result = "; ".join(final_emails)
+                
+                entry_widget.delete(0, tk.END)
+                entry_widget.insert(0, result)
+            else:
+                entry_widget.delete(0, tk.END)
+            
+            dialog.destroy()
+            
+        ttk.Button(btn_frame, text="✅ 确认更新", command=save, style='Accent.TButton').pack(side=tk.RIGHT, padx=5)
+        ttk.Button(btn_frame, text="取消", command=dialog.destroy).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(btn_frame, text="🗑️ 清空内容", command=lambda: text_area.delete(1.0, tk.END)).pack(side=tk.LEFT, padx=5)
+
+    def show_placeholder_menu(self, entry_widget, is_recipient=False):
+        """显示占位符菜单（用于主题/收件人等）"""
         menu = tk.Menu(self.root, tearoff=0)
+        
+        # 收件人特有选项：手动添加邮箱
+        if is_recipient:
+            menu.add_command(label="✏️ 批量编辑/导入邮箱...", 
+                            command=lambda: self.add_manual_email_dialog(entry_widget))
+            menu.add_separator()
         
         # 常用占位符
         menu.add_command(label="📅 {DATE} - 当前日期", 
@@ -2759,6 +2998,17 @@ class OutlookDraftManager:
         menu.add_command(label="📆 {DATETIME} - 日期时间", 
                         command=lambda: self.insert_placeholder(entry_widget, "{DATETIME}"))
         
+        # 自定义占位符
+        if hasattr(self, 'custom_placeholders') and self.custom_placeholders:
+            menu.add_separator()
+            menu.add_command(label="自定义占位符:", state="disabled")
+            for name, value in self.custom_placeholders.items():
+                display_val = str(value)
+                if len(display_val) > 15:
+                    display_val = display_val[:12] + "..."
+                menu.add_command(label=f"  📌 {{{name}}} ({display_val})", 
+                               command=lambda n=name: self.insert_placeholder(entry_widget, f"{{{n}}}"))
+
         menu.add_separator()
         
         # Excel列占位符
@@ -2984,20 +3234,25 @@ class OutlookDraftManager:
             menu.grab_release()
     
     def insert_placeholder(self, entry_widget, placeholder):
-        """在Entry中插入占位符"""
-        if isinstance(entry_widget, ttk.Entry):
+        """在Widget中插入占位符"""
+        if isinstance(entry_widget, (ttk.Entry, tk.Entry)):
             # 获取当前光标位置
-            current_pos = entry_widget.index(tk.INSERT)
-            current_text = entry_widget.get()
-            
-            # 插入占位符
-            new_text = current_text[:current_pos] + placeholder + current_text[current_pos:]
-            entry_widget.delete(0, tk.END)
-            entry_widget.insert(0, new_text)
+            try:
+                current_pos = entry_widget.index(tk.INSERT)
+                entry_widget.insert(current_pos, placeholder)
+                entry_widget.focus()
+            except:
+                pass
+        elif isinstance(entry_widget, (tk.Text, scrolledtext.ScrolledText)):
+            try:
+                entry_widget.insert(tk.INSERT, placeholder)
+                entry_widget.focus()
+            except:
+                pass
             
             # 移动光标到占位符后
-            entry_widget.icursor(current_pos + len(placeholder))
-            entry_widget.focus()
+            # entry_widget.icursor(current_pos + len(placeholder))
+            # entry_widget.focus()
     
     def insert_text_placeholder(self, placeholder):
         """在Text控件中插入占位符"""

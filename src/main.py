@@ -209,6 +209,7 @@ class OutlookDraftManager:
         self.default_excel_folder = ""  # 默认 Excel 文件夹
         
         self.use_dynamic_latest_var = tk.BooleanVar(value=False) # 是否自动使用最新文件
+        self.filename_keywords_var = tk.StringVar(value="") # 文件名关键词过滤
         
         self.setup_ui()
         self.setup_keyboard_shortcuts()
@@ -335,6 +336,12 @@ class OutlookDraftManager:
         chk_auto.pack(side=tk.LEFT, padx=5)
         ToolTip(chk_auto, "勾选后，生成草稿时自动查找并使用所选目录下最新的Excel文件")
         
+        # 关键词过滤输入框
+        ttk.Label(dyn_row, text="|  关键词:").pack(side=tk.LEFT, padx=(5, 0))
+        keyword_entry = ttk.Entry(dyn_row, textvariable=self.filename_keywords_var, width=15)
+        keyword_entry.pack(side=tk.LEFT, padx=2)
+        ToolTip(keyword_entry, "输入关键词以只加载包含该词的最新文件 (留空表示不限制)")
+
         btn_smart = ttk.Button(dyn_row, text="🔍 智能查找", command=self.smart_search_excel)
         btn_smart.pack(side=tk.LEFT, padx=10)
         ToolTip(btn_smart, "配置智能查找规则，根据日期自动匹配文件名")
@@ -629,6 +636,7 @@ class OutlookDraftManager:
         """创建新配置"""
         self.config_name_var.set("")
         self.excel_path_var.set("")
+        self.filename_keywords_var.set("")
         self.range_var.set("A1:C10")
         
         # 清空收件人列表
@@ -670,7 +678,8 @@ class OutlookDraftManager:
             "custom_placeholders": self.custom_placeholders.copy(),  # 保存自定义占位符
             "high_priority": self.priority_var.get(), # 保存优先级
             "read_receipt": self.receipt_var.get(),   # 保存已读回执
-            "use_dynamic_latest": self.use_dynamic_latest_var.get()
+            "use_dynamic_latest": self.use_dynamic_latest_var.get(),
+            "filename_keywords": self.filename_keywords_var.get()
         }
         
         self.configs[config_name] = config_data
@@ -727,6 +736,7 @@ class OutlookDraftManager:
         self.priority_var.set(config.get("high_priority", False))
         self.receipt_var.set(config.get("read_receipt", False))
         self.use_dynamic_latest_var.set(config.get("use_dynamic_latest", False))
+        self.filename_keywords_var.set(config.get("filename_keywords", ""))
         
         # 加载自定义占位符
         self.custom_placeholders = config.get("custom_placeholders", {}).copy()
@@ -1084,8 +1094,8 @@ class OutlookDraftManager:
                 except:
                     pass
 
-    def get_latest_excel_file(self, base_path_str):
-        """获取指定路径所在目录下的最新Excel文件"""
+    def get_latest_excel_file(self, base_path_str, keywords=None):
+        """获取指定路径所在目录下的最新Excel文件（支持关键词过滤）"""
         if not base_path_str:
             return None
             
@@ -1108,6 +1118,26 @@ class OutlookDraftManager:
                 
             if not files:
                 return None
+
+            # 关键词过滤
+            if keywords:
+                # 支持多个关键词（分号分隔，或空格分隔）
+                keyword_list = keywords.replace(';', ' ').replace('，', ' ').split()
+                if keyword_list:
+                    filtered_files = []
+                    for f in files:
+                        fname = f.name.lower()
+                        # 必须包含所有关键词？还是包含任意？这里假设必须包含所有关键词
+                        # 或者为了简单起见，如果只填了一个词就是包含该词
+                        # 我们采取：必须包含列表中的所有词，才算匹配
+                        if all(k.lower() in fname for k in keyword_list):
+                            filtered_files.append(f)
+                    
+                    if filtered_files:
+                        files = filtered_files
+                    else:
+                        print(f"未找到包含关键词 '{keywords}' 的文件")
+                        return None
                 
             # 按修改时间排序（最新的在前）
             files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
@@ -1120,6 +1150,8 @@ class OutlookDraftManager:
     def load_latest_and_capture(self):
         """一键操作：加载最新 -> 读取 -> 截图"""
         current_path = self.excel_path_var.get()
+        keywords = self.filename_keywords_var.get().strip()
+
         if not current_path:
              if self.default_excel_folder and os.path.exists(self.default_excel_folder):
                  current_path = os.path.join(self.default_excel_folder, "dummy.xlsx")
@@ -1127,12 +1159,16 @@ class OutlookDraftManager:
                  messagebox.showwarning("提示", "请先选择一个Excel文件或设置默认文件夹")
                  return
 
-        self.status_var.set("正在查找最新文件...")
+        status_msg = f"正在查找最新文件 (关键词: {keywords})..." if keywords else "正在查找最新文件..."
+        self.status_var.set(status_msg)
         self.root.update()
 
-        latest_file = self.get_latest_excel_file(current_path)
+        latest_file = self.get_latest_excel_file(current_path, keywords=keywords)
         if not latest_file:
-            messagebox.showwarning("提示", "在同一文件夹下未找到Excel文件")
+            msg = f"在文件夹中未找到匹配的Excel文件"
+            if keywords:
+                msg += f"\n(关键词: {keywords})"
+            messagebox.showwarning("提示", msg)
             self.status_var.set("未找到文件")
             return
             
@@ -1400,7 +1436,8 @@ class OutlookDraftManager:
         if self.use_dynamic_latest_var.get():
             try:
                 current_path = self.excel_path_var.get()
-                latest = self.get_latest_excel_file(current_path)
+                keywords = self.filename_keywords_var.get().strip()
+                latest = self.get_latest_excel_file(current_path, keywords=keywords)
                 if latest and os.path.exists(latest):
                     # 总是更新为最新路径
                     self.excel_path_var.set(latest)
@@ -1459,8 +1496,9 @@ class OutlookDraftManager:
                 try:
                     # 使用当前配置的路径（可能是自动更新后的）
                     s_path = self.excel_path_var.get()
+                    keywords = self.filename_keywords_var.get().strip()
                     # 再次确保是最新（如果是手动模式但想用smart标签）
-                    latest_s = self.get_latest_excel_file(s_path)
+                    latest_s = self.get_latest_excel_file(s_path, keywords=keywords)
                     if latest_s: s_path = latest_s
 
                     if s_path and os.path.exists(s_path):
@@ -2491,7 +2529,9 @@ class OutlookDraftManager:
                     original_excel_path = excel_path
                     if config.get('use_dynamic_latest', False):
                         try:
-                            found_latest = self.get_latest_excel_file(excel_path)
+                            # 传入配置中的关键词
+                            keywords = config.get('filename_keywords', '')
+                            found_latest = self.get_latest_excel_file(excel_path, keywords=keywords)
                             if found_latest and os.path.exists(found_latest):
                                 excel_path = found_latest
                                 log_message(f"  ✓ 自动切换到最新文件: {os.path.basename(excel_path)}")

@@ -110,6 +110,10 @@ class OutlookDraftManager:
         self.ui_scale = 1.0  # 界面缩放比例
         self.font_scale = 1.0  # 字体缩放比例
         
+        # 新增：智能匹配相关变量
+        self.smart_match_var = tk.BooleanVar(value=False)
+        self.filename_keyword_var = tk.StringVar()
+
         # 自动保存定时器
         self.auto_save_timer = None
         
@@ -207,9 +211,6 @@ class OutlookDraftManager:
         
         self.excel_history = []  # Excel 文件历史记录
         self.default_excel_folder = ""  # 默认 Excel 文件夹
-        
-        self.use_dynamic_latest_var = tk.BooleanVar(value=False) # 是否自动使用最新文件
-        self.filename_keywords_var = tk.StringVar(value="") # 文件名关键词过滤
         
         self.setup_ui()
         self.setup_keyboard_shortcuts()
@@ -315,36 +316,49 @@ class OutlookDraftManager:
         self.excel_path_combo.bind("<<ComboboxSelected>>", lambda e: self.load_sheets())
         ToolTip(self.excel_path_combo, "输入或选择Excel文件路径")
         
-        btn_browse = ttk.Button(f_row, text="浏览...", command=self.select_excel_file)
+        btn_browse = ttk.Button(f_row, text="浏览文件...", command=self.select_excel_file)
         btn_browse.pack(side=tk.LEFT, padx=2)
         ToolTip(btn_browse, "打开文件选择对话框")
+        
+        # 移除旧的文件夹按钮，合并到"定位文件夹"
+        # btn_folder = ttk.Button(f_row, text="浏览文件夹...", command=self.select_excel_folder)
+        # btn_folder.pack(side=tk.LEFT, padx=2)
         
         btn_latest = ttk.Button(f_row, text="加载最新", command=self.load_latest_excel_file)
         btn_latest.pack(side=tk.LEFT, padx=2)
         ToolTip(btn_latest, "自动加载包含'出货计划'或其他关键词的最新Excel文件")
         
+        btn_open_dir = ttk.Button(f_row, text="📂 定位文件夹", command=self.select_excel_folder)
+        btn_open_dir.pack(side=tk.LEFT, padx=2)
+        ToolTip(btn_open_dir, "指定数据源文件夹，并自动搜索其中最新的Excel文件")
+        
         # 动态Excel选项
         dyn_row = ttk.Frame(excel_frame)
         dyn_row.pack(fill=tk.X, pady=2)
         self.prompt_excel_var = tk.BooleanVar(value=False)
-        chk_prompt = ttk.Checkbutton(dyn_row, text="运行时询问Excel文件 (适用于文件位置经常变动的情况)", 
-                       variable=self.prompt_excel_var)
+        chk_prompt = ttk.Checkbutton(dyn_row, text="运行时询问", variable=self.prompt_excel_var)
         chk_prompt.pack(side=tk.LEFT, padx=5)
         ToolTip(chk_prompt, "勾选后，每次生成草稿时都会弹窗询问使用哪个Excel文件")
         
-        chk_auto = ttk.Checkbutton(dyn_row, text="自动加载最新", variable=self.use_dynamic_latest_var)
-        chk_auto.pack(side=tk.LEFT, padx=5)
-        ToolTip(chk_auto, "勾选后，生成草稿时自动查找并使用所选目录下最新的Excel文件")
-        
-        # 关键词过滤输入框
-        ttk.Label(dyn_row, text="|  关键词:").pack(side=tk.LEFT, padx=(5, 0))
-        keyword_entry = ttk.Entry(dyn_row, textvariable=self.filename_keywords_var, width=15)
-        keyword_entry.pack(side=tk.LEFT, padx=2)
-        ToolTip(keyword_entry, "输入关键词以只加载包含该词的最新文件 (留空表示不限制)")
+        chk_smart = ttk.Checkbutton(dyn_row, text="智能文件匹配", variable=self.smart_match_var)
+        chk_smart.pack(side=tk.LEFT, padx=10)
+        ToolTip(chk_smart, "勾选后，将自动查找最新版本的Excel文件 (支持跨文件夹)")
 
-        btn_smart = ttk.Button(dyn_row, text="🔍 智能查找", command=self.smart_search_excel)
+        self.attach_excel_var = tk.BooleanVar(value=False)
+        chk_attach = ttk.Checkbutton(dyn_row, text="附带源文件", variable=self.attach_excel_var)
+        chk_attach.pack(side=tk.LEFT, padx=10)
+        ToolTip(chk_attach, "勾选后，生成草稿时会自动将当前使用的Excel文件作为附件")
+        
+        btn_smart = ttk.Button(dyn_row, text="🔍 智能查找工具", command=self.smart_search_excel)
         btn_smart.pack(side=tk.LEFT, padx=10)
-        ToolTip(btn_smart, "配置智能查找规则，根据日期自动匹配文件名")
+        ToolTip(btn_smart, "手动配置智能查找规则")
+
+        # 关键词行
+        kw_row = ttk.Frame(excel_frame)
+        kw_row.pack(fill=tk.X, pady=2)
+        ttk.Label(kw_row, text="文件名关键词:").pack(side=tk.LEFT)
+        ttk.Entry(kw_row, textvariable=self.filename_keyword_var, width=20).pack(side=tk.LEFT, padx=5)
+        ttk.Label(kw_row, text="(选填, 用于智能匹配时的筛选)", foreground="gray").pack(side=tk.LEFT)
         
         # 工作表与范围
         s_row = ttk.Frame(excel_frame)
@@ -363,7 +377,6 @@ class OutlookDraftManager:
         d_row = ttk.Frame(excel_frame)
         d_row.pack(fill=tk.X, pady=5)
         ttk.Button(d_row, text="读取数据", command=self.read_excel_data).pack(side=tk.LEFT, padx=2)
-        ttk.Button(d_row, text="⚡加载最新并截图", command=self.load_latest_and_capture).pack(side=tk.LEFT, padx=2)
         ttk.Button(d_row, text="预览数据", command=self.preview_excel_data).pack(side=tk.LEFT, padx=2)
         ttk.Button(d_row, text="保留格式粘贴", command=self.paste_with_formatting).pack(side=tk.LEFT, padx=2)
         ttk.Button(d_row, text="粘贴为图片", command=self.paste_as_picture).pack(side=tk.LEFT, padx=2)
@@ -636,7 +649,6 @@ class OutlookDraftManager:
         """创建新配置"""
         self.config_name_var.set("")
         self.excel_path_var.set("")
-        self.filename_keywords_var.set("")
         self.range_var.set("A1:C10")
         
         # 清空收件人列表
@@ -677,9 +689,10 @@ class OutlookDraftManager:
             "inline_images": self.inline_images.copy() if hasattr(self, 'inline_images') else [], # 保存内嵌图片信息
             "custom_placeholders": self.custom_placeholders.copy(),  # 保存自定义占位符
             "high_priority": self.priority_var.get(), # 保存优先级
-            "read_receipt": self.receipt_var.get(),   # 保存已读回执
-            "use_dynamic_latest": self.use_dynamic_latest_var.get(),
-            "filename_keywords": self.filename_keywords_var.get()
+            "read_receipt": self.receipt_var.get(),    # 保存已读回执
+            "smart_match": self.smart_match_var.get(), # 保存智能匹配开关
+            "filename_keyword": self.filename_keyword_var.get(), # 保存关键词
+            "attach_excel": self.attach_excel_var.get() # 保存是否附带源文件
         }
         
         self.configs[config_name] = config_data
@@ -735,14 +748,26 @@ class OutlookDraftManager:
         # 加载发送选项
         self.priority_var.set(config.get("high_priority", False))
         self.receipt_var.set(config.get("read_receipt", False))
-        self.use_dynamic_latest_var.set(config.get("use_dynamic_latest", False))
-        self.filename_keywords_var.set(config.get("filename_keywords", ""))
+        self.smart_match_var.set(config.get("smart_match", False))
+        self.filename_keyword_var.set(config.get("filename_keyword", ""))
+        self.attach_excel_var.set(config.get("attach_excel", False))
         
         # 加载自定义占位符
         self.custom_placeholders = config.get("custom_placeholders", {}).copy()
         
         # 如果有Excel文件，加载工作表列表
-        if config.get("excel_path") and os.path.exists(config["excel_path"]):
+        base_excel_path = config.get("excel_path", "")
+        # 方案一：如果开启智能匹配，尝试查找最新文件
+        if self.smart_match_var.get() and base_excel_path:
+            latest_path = self.get_latest_file_in_folder(base_excel_path)
+            if latest_path and latest_path != base_excel_path:
+                print(f"Smart Match: Replaced {base_excel_path} with {latest_path}")
+                # Update the variable so user sees the new file
+                if self.load_excel_path_var.get():
+                     self.excel_path_var.set(latest_path)
+                base_excel_path = latest_path
+        
+        if base_excel_path and os.path.exists(base_excel_path):
             self.load_sheets()
             self.sheet_combo.set(config.get("sheet_name", ""))
         
@@ -781,6 +806,61 @@ class OutlookDraftManager:
                 # 更新默认文件夹
                 self.default_excel_folder = os.path.dirname(file_paths[0])
                 self.save_ui_preferences()
+
+    def select_excel_folder(self):
+        """选择文件夹作为数据源"""
+        folder_path = filedialog.askdirectory(title="选择包含Excel文件的文件夹")
+        if not folder_path:
+            return
+            
+        try:
+            folder = Path(folder_path)
+            if not folder.exists():
+                return
+                
+            # 查找Excel文件
+            files = []
+            keyword = self.filename_keyword_var.get().strip()
+            
+            # 扩展名列表
+            extensions = ['*.xlsx', '*.xls']
+            
+            for ext in extensions:
+                found = list(folder.glob(ext))
+                # 关键词过滤
+                if keyword:
+                    found = [f for f in found if keyword in f.name]
+                files.extend(found)
+            
+            if not files:
+                msg = "该文件夹下没有找到"
+                if keyword:
+                    msg += f"包含关键词 '{keyword}' 的"
+                msg += "Excel文件"
+                messagebox.showwarning("提示", msg)
+                return
+            
+            # 按修改时间排序，最新的在前
+            files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+            latest_file = str(files[0])
+            
+            self.excel_path_var.set(latest_file)
+            self.add_to_excel_history(latest_file)
+            self.load_sheets()
+            
+            self.status_var.set(f"已加载文件夹最新文件: {os.path.basename(latest_file)}")
+            
+            # 更新默认文件夹
+            self.default_excel_folder = folder_path
+            self.save_ui_preferences()
+            
+            messagebox.showinfo("成功", f"已选中文件夹并加载最新文件：\n{os.path.basename(latest_file)}\n\n(已自动启用智能文件匹配功能)")
+            
+            # 自动勾选智能匹配
+            self.smart_match_var.set(True)
+            
+        except Exception as e:
+            messagebox.showerror("错误", f"处理文件夹失败: {str(e)}")
 
     def load_latest_excel_file(self):
         """加载默认文件夹中最新的Excel文件"""
@@ -898,6 +978,9 @@ class OutlookDraftManager:
         excel_paths_str = self.excel_path_var.get()
         if not excel_paths_str:
             return
+
+        # 处理路径中的占位符
+        excel_paths_str = self.process_template_variables(excel_paths_str)
             
         # 如果有多个文件，只读取第一个文件的Sheet
         excel_path = excel_paths_str.split(';')[0]
@@ -922,6 +1005,9 @@ class OutlookDraftManager:
     def auto_detect_range(self):
         """自动检测工作表中有数据的范围"""
         excel_paths_str = self.excel_path_var.get()
+        # 处理路径中的占位符
+        excel_paths_str = self.process_template_variables(excel_paths_str)
+
         sheet_name = self.sheet_combo.get()
         col_limit_str = self.col_limit_var.get().strip().upper()
         
@@ -933,7 +1019,7 @@ class OutlookDraftManager:
         excel_path = excel_paths_str.split(';')[0]
         
         if not os.path.exists(excel_path):
-            messagebox.showwarning("警告", "Excel文件不存在")
+            messagebox.showwarning("警告", f"Excel文件不存在: {excel_path}")
             return
         
         if not sheet_name:
@@ -1093,115 +1179,89 @@ class OutlookDraftManager:
                     wb.close()
                 except:
                     pass
-
-    def get_latest_excel_file(self, base_path_str, keywords=None):
-        """获取指定路径所在目录下的最新Excel文件（支持关键词过滤）"""
-        if not base_path_str:
-            return None
-            
-        # 使用第一个路径的目录
-        first_path = base_path_str.split(';')[0]
-        folder = os.path.dirname(first_path)
-        
-        # 如果获取不到目录(可能只输入了文件名)，尝试使用 default_excel_folder
-        if not folder and self.default_excel_folder:
-            folder = self.default_excel_folder
-            
-        if not folder or not os.path.exists(folder):
-            return None
-            
-        try:
-            # 查找所有xlsx和xls文件
-            files = []
-            for ext in ['*.xlsx', '*.xls']:
-                files.extend(list(Path(folder).glob(ext)))
-                
-            if not files:
-                return None
-
-            # 关键词过滤
-            if keywords:
-                # 支持多个关键词（分号分隔，或空格分隔）
-                keyword_list = keywords.replace(';', ' ').replace('，', ' ').split()
-                if keyword_list:
-                    filtered_files = []
-                    for f in files:
-                        fname = f.name.lower()
-                        # 必须包含所有关键词？还是包含任意？这里假设必须包含所有关键词
-                        # 或者为了简单起见，如果只填了一个词就是包含该词
-                        # 我们采取：必须包含列表中的所有词，才算匹配
-                        if all(k.lower() in fname for k in keyword_list):
-                            filtered_files.append(f)
-                    
-                    if filtered_files:
-                        files = filtered_files
-                    else:
-                        print(f"未找到包含关键词 '{keywords}' 的文件")
-                        return None
-                
-            # 按修改时间排序（最新的在前）
-            files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
-            return str(files[0])
-            
-        except Exception as e:
-            print(f"查找最新文件出错: {e}")
-            return None
-
-    def load_latest_and_capture(self):
-        """一键操作：加载最新 -> 读取 -> 截图"""
-        current_path = self.excel_path_var.get()
-        keywords = self.filename_keywords_var.get().strip()
-
-        if not current_path:
-             if self.default_excel_folder and os.path.exists(self.default_excel_folder):
-                 current_path = os.path.join(self.default_excel_folder, "dummy.xlsx")
-             else:
-                 messagebox.showwarning("提示", "请先选择一个Excel文件或设置默认文件夹")
-                 return
-
-        status_msg = f"正在查找最新文件 (关键词: {keywords})..." if keywords else "正在查找最新文件..."
-        self.status_var.set(status_msg)
-        self.root.update()
-
-        latest_file = self.get_latest_excel_file(current_path, keywords=keywords)
-        if not latest_file:
-            msg = f"在文件夹中未找到匹配的Excel文件"
-            if keywords:
-                msg += f"\n(关键词: {keywords})"
-            messagebox.showwarning("提示", msg)
-            self.status_var.set("未找到文件")
-            return
-            
-        # 更新路径
-        self.excel_path_var.set(latest_file)
-        self.add_to_excel_history(latest_file)
-        self.load_sheets()
-        
-        self.status_var.set(f"已加载: {os.path.basename(latest_file)}，正在读取...")
-        self.root.update()
-        
-        # 读取数据
-        # 确保有工作表选择
-        if not self.sheet_combo.get():
-             if self.sheet_combo['values']:
-                 self.sheet_combo.current(0)
-             else:
-                 messagebox.showwarning("错误", "无法读取工作表")
-                 return
-                 
-        self.read_excel_data()
-        
-        # 截图并粘贴
-        if self.current_excel_data:
-             self.status_var.set("正在生成图片...")
-             self.root.update()
-             self.paste_as_picture()
-             messagebox.showinfo("完成", f"已加载最新文件 {os.path.basename(latest_file)}\n并成功插入截图！")
-             self.status_var.set("操作完成")
     
+    def _internal_read_excel(self, excel_path, sheet_name, data_range):
+        """内部方法：读取指定Excel文件的内容，返回数据列表"""
+        if not os.path.exists(excel_path):
+             return None, f"文件不存在: {excel_path}"
+             
+        try:
+            wb = openpyxl.load_workbook(excel_path, read_only=False, data_only=True)
+            if sheet_name not in wb.sheetnames:
+                wb.close()
+                return None, f"工作表 {sheet_name} 不存在"
+                
+            ws = wb[sheet_name]
+            
+            # 读取指定范围的数据
+            try:
+                cells = ws[data_range]
+            except Exception as e:
+                wb.close()
+                return None, f"无法读取范围 {data_range}: {e}"
+                
+            current_file_rows = []
+            
+            # 处理单行或多行数据 (openpyxl range handling)
+            if isinstance(cells, tuple) and len(cells) > 0:
+                if isinstance(cells[0], tuple):
+                    # 多行数据
+                    for row in cells:
+                        row_data = [cell.value if cell.value is not None else "" for cell in row]
+                        current_file_rows.append(row_data)
+                else:
+                    # 单行数据
+                    row_data = [cell.value if cell.value is not None else "" for cell in cells]
+                    current_file_rows.append(row_data)
+            elif hasattr(cells, 'value'): # 单个单元格
+                 current_file_rows.append([cells.value if cells.value is not None else ""])
+            else:
+                 # 可能是 list of cells
+                 if isinstance(cells, list):
+                     row_data = [cell.value if cell.value is not None else "" for cell in cells]
+                     current_file_rows.append(row_data)
+
+            # 尝试获取列宽 (仅作参考)
+            column_widths = []
+            try:
+                # 解析起始列（如 A1:F10 中的 A）
+                if ':' in data_range:
+                    start_col_str = data_range.split(':')[0]
+                else:
+                    start_col_str = data_range
+                    
+                col_letter_start = ''.join([c for c in start_col_str if c.isalpha()])
+                from openpyxl.utils import column_index_from_string, get_column_letter
+                if col_letter_start:
+                    start_col_idx = column_index_from_string(col_letter_start)
+                    
+                    if current_file_rows and len(current_file_rows) > 0:
+                         # 读取每列的实际宽度
+                        for i in range(len(current_file_rows[0])):
+                            col_idx = start_col_idx + i
+                            col_letter_current = get_column_letter(col_idx)
+                            if col_letter_current in ws.column_dimensions:
+                                width = ws.column_dimensions[col_letter_current].width
+                                # Excel宽度转像素 (近似值)
+                                pixel_width = int(width * 7) if width else 80
+                                column_widths.append(pixel_width)
+                            else:
+                                column_widths.append(80)
+            except:
+                pass
+
+            wb.close()
+            return (current_file_rows, column_widths), None
+
+        except Exception as e:
+            return None, str(e)
+
     def read_excel_data(self):
         """读取Excel数据"""
         excel_paths_str = self.excel_path_var.get()
+        # 处理路径中的占位符
+        excel_paths_str = self.process_template_variables(excel_paths_str)
+
         sheet_name = self.sheet_combo.get()
         data_range = self.range_var.get().strip()
         
@@ -1226,98 +1286,53 @@ class OutlookDraftManager:
         
         try:
             for idx, excel_path in enumerate(file_paths):
-                if not os.path.exists(excel_path):
+                # 调用内部方法
+                result, error = self._internal_read_excel(excel_path, sheet_name, data_range)
+                
+                if error:
+                    print(f"Warning reading {excel_path}: {error}")
+                    continue
+                
+                if not result:
                     continue
                     
-                wb = openpyxl.load_workbook(excel_path, read_only=False, data_only=True)
-                if sheet_name not in wb.sheetnames:
-                    print(f"Sheet {sheet_name} not found in {excel_path}")
-                    wb.close()
-                    continue
-                    
-                ws = wb[sheet_name]
+                current_file_rows, col_widths = result
                 
-                # 读取指定范围的数据
-                try:
-                    cells = ws[data_range]
-                except Exception as e:
-                    print(f"Error reading range {data_range} in {excel_path}: {e}")
-                    wb.close()
-                    continue
-                    
-                current_file_rows = []
+                # 记录第一个文件的列宽
+                if idx == 0:
+                    self.excel_column_widths = col_widths
                 
-                # 处理单行或多行数据
-                if isinstance(cells, tuple) and len(cells) > 0:
-                    if isinstance(cells[0], tuple):
-                        # 多行数据
-                        for row in cells:
-                            row_data = [cell.value if cell.value is not None else "" for cell in row]
-                            current_file_rows.append(row_data)
-                    else:
-                        # 单行数据
-                        row_data = [cell.value if cell.value is not None else "" for cell in cells]
-                        current_file_rows.append(row_data)
-                else:
-                    # 单个单元格
-                    current_file_rows.append([cells.value if cells.value is not None else ""])
-                
-                # 记录第一个文件的列宽信息
-                if idx == 0 and current_file_rows and len(current_file_rows[0]) > 0:
-                    self.excel_column_widths = []
-                    # 解析起始列（如 A1:F10 中的 A）
-                    start_col_str = data_range.split(':')[0]
-                    col_letter = ''.join([c for c in start_col_str if c.isalpha()])
-                    from openpyxl.utils import column_index_from_string, get_column_letter
-                    start_col_idx = column_index_from_string(col_letter)
-                    
-                    # 读取每列的实际宽度
-                    for i in range(len(current_file_rows[0])):
-                        col_idx = start_col_idx + i
-                        col_letter_current = get_column_letter(col_idx)
-                        if col_letter_current in ws.column_dimensions:
-                            width = ws.column_dimensions[col_letter_current].width
-                            # Excel宽度转像素 (近似值)
-                            pixel_width = int(width * 7) if width else 80
-                            self.excel_column_widths.append(pixel_width)
-                        else:
-                            self.excel_column_widths.append(80)
-
-                wb.close()
-                
-                # 合并数据逻辑
                 if not current_file_rows:
                     continue
-                    
-                if headers is None:
-                    # 第一个文件的第一行作为表头
-                    headers = current_file_rows[0]
+
+                # 合并逻辑：如果是第一个文件，保留表头；后续文件跳过表头
+                if idx == 0:
                     all_data_rows.extend(current_file_rows)
+                    if current_file_rows:
+                        headers = current_file_rows[0]
                 else:
-                    # 后续文件，检查第一行是否为表头
-                    if current_file_rows[0] == headers:
-                        # 如果是表头，跳过第一行
+                    # 检查表头是否一致（可选）
+                    if headers and len(current_file_rows) > 0 and current_file_rows[0] == headers:
+                        # 简单的合并：跳过第一行（假设是表头）
                         all_data_rows.extend(current_file_rows[1:])
                     else:
-                        # 如果不是表头，全部添加
                         all_data_rows.extend(current_file_rows)
-            
-            self.current_excel_data = all_data_rows
-            
-            if not self.current_excel_data:
-                messagebox.showwarning("提示", "未读取到任何数据")
-                self.status_var.set("读取完成，无数据")
-                return
-
-            self.status_var.set(f"已读取 {len(self.current_excel_data)} 行数据 (来自 {len(file_paths)} 个文件)")
-            messagebox.showinfo("成功", f"成功读取 {len(self.current_excel_data)} 行数据\n(包含表头)")
-            
+        
+            if not all_data_rows:
+                messagebox.showinfo("提示", "未读取到数据或文件不存在")
+                self.current_excel_data = None
+            else:
+                self.current_excel_data = all_data_rows
+                self.status_var.set(f"读取成功: {len(all_data_rows)} 行数据 (来自 {len(file_paths)} 文件)")
+                messagebox.showinfo("成功", f"成功读取 {len(all_data_rows)} 行数据\n(包含表头)")
+                
         except Exception as e:
             import traceback
             traceback.print_exc()
             messagebox.showerror("错误", f"读取Excel失败: {str(e)}")
             self.status_var.set("读取失败")
 
+    # 移除 open_current_folder 方法，因为它已不再被使用
     
     def format_excel_data_as_table(self):
         """将Excel数据格式化为HTML表格"""
@@ -1351,6 +1366,104 @@ class OutlookDraftManager:
         
         return "\n".join(text_lines)
     
+    def get_latest_file_in_folder(self, excel_path, keyword=None):
+        """
+        方案一（增强版）：
+        1. 关键词寻址：如果设置了关键词，只匹配包含关键词的文件。
+        2. 智能文件夹切换：检测是否有更新的同级文件夹（如 2024-01 -> 2024-02），如果有则切换。
+        Params:
+            keyword (str, optional): 覆盖UI的关键词设置，用于批量处理时传入特定配置的关键词。
+        """
+        if not excel_path:
+            return None
+        
+        try:
+            path_obj = Path(excel_path)
+            current_folder = path_obj.parent
+            suffix = path_obj.suffix
+            
+            # 获取配置的关键词 (优先使用传入参数，否则使用UI)
+            if keyword is None:
+                keyword = self.filename_keyword_var.get().strip()
+            else:
+                keyword = keyword.strip()
+            
+            # --- 步骤 1: 优先在当前定位文件夹中查找 ---
+            # 策略 A: 精确匹配 (带关键词)
+            if keyword:
+                search_pattern = f"*{keyword}*{suffix}"
+                files = list(current_folder.glob(search_pattern))
+                if files:
+                    files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+                    return str(files[0])
+            
+            # 策略 B: 如果没找到带关键词的，或者没设置关键词 -> 查找最新的文件
+            # 用户要求："如果没有,再尋找文件里面最新修改时间的文件"
+            fallback_pattern = f"*{suffix}"
+            files = list(current_folder.glob(fallback_pattern))
+            if files:
+                files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+                return str(files[0])
+
+            # --- 步骤 2: (备选) 如果当前文件夹没找到任何Excel，尝试智能跨文件夹搜索 ---
+            # 检查是否有更新的同级文件夹
+            try:
+                parent_dir = current_folder.parent
+                if parent_dir.exists():
+                    subdirs = [d for d in parent_dir.iterdir() if d.is_dir()]
+                    subdirs = [d for d in subdirs if not d.name.startswith('.')]
+                    
+                    if subdirs:
+                        subdirs.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+                        newest_dir = subdirs[0]
+                        
+                        if newest_dir != current_folder:
+                            # 在最新文件夹里找
+                            # 2.1 关键词
+                            if keyword:
+                                files = list(newest_dir.glob(f"*{keyword}*{suffix}"))
+                                if files:
+                                    files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+                                    return str(files[0])
+                            
+                            # 2.2 最新文件
+                            files = list(newest_dir.glob(fallback_pattern))
+                            if files:
+                                files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+                                return str(files[0])
+            except Exception as e:
+                print(f"Folder search error: {e}")
+            
+            return excel_path
+            
+        except Exception as e:
+            print(f"Smart search error: {e}")
+            return excel_path
+
+    def process_smart_image_logic(self, body_template, excel_path, sheet_name, data_range):
+        """
+        方案二：处理 {SMART_IMAGE} 占位符
+        返回: (processed_body, new_inline_image_dict or None)
+        """
+        if "{SMART_IMAGE}" not in body_template:
+            return body_template, None
+            
+        if not excel_path or not os.path.exists(excel_path) or not sheet_name or not data_range:
+            return body_template.replace("{SMART_IMAGE}", "[错误: 无法获取Excel截图，请检查配置]"), None
+            
+        # 截图
+        img_path = self.copy_range_as_image_com(excel_path, sheet_name, data_range)
+        if not img_path:
+             return body_template.replace("{SMART_IMAGE}", "[错误: 截图失败]"), None
+             
+        # 生成CID
+        cid = f"smart_img_{uuid.uuid4().hex}@outlook.drafter"
+        
+        # 替换正文
+        new_body = body_template.replace("{SMART_IMAGE}", f'<img src="cid:{cid}" style="max-width:100%">')
+        
+        return new_body, {'path': img_path, 'cid': cid}
+
     def generate_preview(self):
         """在弹出窗口中生成邮件预览"""
         # 获取邮箱地址
@@ -1432,18 +1545,6 @@ class OutlookDraftManager:
     
     def create_draft(self):
         """创建Outlook草稿"""
-        # 自动加载最新文件逻辑 (Scheme 1 support)
-        if self.use_dynamic_latest_var.get():
-            try:
-                current_path = self.excel_path_var.get()
-                keywords = self.filename_keywords_var.get().strip()
-                latest = self.get_latest_excel_file(current_path, keywords=keywords)
-                if latest and os.path.exists(latest):
-                    # 总是更新为最新路径
-                    self.excel_path_var.set(latest)
-            except Exception as e:
-                print(f"Auto-update excel path failed: {e}")
-
         # 获取邮箱地址
         to_list = [x.strip() for x in self.to_entry_var.get().split(';') if x.strip()]
         cc_list = [x.strip() for x in self.cc_entry_var.get().split(';') if x.strip()]
@@ -1460,6 +1561,29 @@ class OutlookDraftManager:
             messagebox.showwarning("警告", "请填写主题")
             return
         
+        # 方案一：智能匹配最新文件
+        processed_excel_paths = self.process_template_variables(self.excel_path_var.get())
+        current_excel_path = processed_excel_paths.split(';')[0]
+        sheet_name = self.sheet_combo.get()
+        data_range = self.range_var.get()
+        
+        if self.smart_match_var.get() and current_excel_path:
+            latest_path = self.get_latest_file_in_folder(current_excel_path)
+            if latest_path != current_excel_path:
+                print(f"Creating Draft: Switching {current_excel_path} -> {latest_path}")
+                current_excel_path = latest_path
+
+        # 方案二：处理 {SMART_IMAGE}
+        # 注意：这会生成新的临时文件，不应保存到 self.inline_images 以免污染后续操作，
+        # 而是应该只为此单次创建添加。
+        temp_inline_images = []
+        if "{SMART_IMAGE}" in body_template:
+            body_template, smart_img_info = self.process_smart_image_logic(
+                body_template, current_excel_path, sheet_name, data_range
+            )
+            if smart_img_info:
+                temp_inline_images.append(smart_img_info)
+
         try:
             # 连接Outlook
             outlook = win32com.client.Dispatch("Outlook.Application")
@@ -1491,40 +1615,6 @@ class OutlookDraftManager:
                 excel_html = self.format_excel_data_as_table()
                 body_html = body_html.replace("{EXCEL_DATA}", excel_html)
             
-            # 处理 {SMART_IMAGE} - 自动抓取最新文件截图
-            if "{SMART_IMAGE}" in body_html:
-                try:
-                    # 使用当前配置的路径（可能是自动更新后的）
-                    s_path = self.excel_path_var.get()
-                    keywords = self.filename_keywords_var.get().strip()
-                    # 再次确保是最新（如果是手动模式但想用smart标签）
-                    latest_s = self.get_latest_excel_file(s_path, keywords=keywords)
-                    if latest_s: s_path = latest_s
-
-                    if s_path and os.path.exists(s_path):
-                        s_sheet = self.sheet_combo.get()
-                        s_range = self.range_var.get()
-                        
-                        # 简单的Sheet回退逻辑
-                        if not s_sheet:
-                            try:
-                                # 尝试快速读取Sheet名
-                                import openpyxl
-                                wb_tmp = openpyxl.load_workbook(s_path, read_only=True)
-                                if wb_tmp.sheetnames: s_sheet = wb_tmp.sheetnames[0]
-                                wb_tmp.close()
-                            except: pass
-                            
-                        if s_sheet and s_range:
-                            s_img_path = self.copy_range_as_image_com(s_path, s_sheet, s_range)
-                            if s_img_path:
-                                s_cid = f"smart_{uuid.uuid4().hex}@local"
-                                self.inline_images.append({'path': s_img_path, 'cid': s_cid})
-                                s_tag = f'<img src="cid:{s_cid}" alt="SmartImage" style="max-width:100%; border:1px solid #ddd;"><br/>'
-                                body_html = body_html.replace("{SMART_IMAGE}", s_tag)
-                except Exception as e:
-                    print(f"Smart Img Error: {e}")
-
             # 处理 {EXCEL_IMAGE} 占位符
             if "{EXCEL_IMAGE}" in body_html:
                 try:
@@ -1547,14 +1637,23 @@ class OutlookDraftManager:
             
             # 添加普通附件（跳过已作为 inline_images 的路径，避免重复）
             inline_paths = [img.get('path') for img in getattr(self, 'inline_images', [])]
-            for attachment_path in self.attachments:
+            
+            # 如果勾选了"附带源文件"，则将当前使用的Excel文件加入附件列表
+            final_attachments = self.attachments.copy()
+            if self.attach_excel_var.get() and current_excel_path and os.path.exists(current_excel_path):
+                # 避免重复添加
+                if current_excel_path not in final_attachments:
+                    final_attachments.append(current_excel_path)
+
+            for attachment_path in final_attachments:
                 if attachment_path in inline_paths:
                     continue
                 if os.path.exists(attachment_path):
                     mail.Attachments.Add(attachment_path)
 
             # 添加并标记内嵌图片（Content-ID），以便在HTML中使用cid:引用
-            for img in getattr(self, 'inline_images', []):
+            all_inline_images = getattr(self, 'inline_images', []) + temp_inline_images
+            for img in all_inline_images:
                 path = img.get('path')
                 cid = img.get('cid')
                 if not path or not cid:
@@ -1564,6 +1663,11 @@ class OutlookDraftManager:
                         att = mail.Attachments.Add(path)
                         # PR_ATTACH_CONTENT_ID (0x3712001F) 指定附件的 Content-ID
                         try:
+                            # 关键：设置为隐藏附件 (0x7FFE000B = PR_ATTACHMENT_HIDDEN)
+                            # 这有助于实现“粘贴图片不带到附件栏”的效果
+                            # 但注意：Outlook行为不一，通常 CID + HTML引用 就足够隐藏
+                            # att.PropertyAccessor.SetProperty("http://schemas.microsoft.com/mapi/proptag/0x7FFE000B", True)
+                            
                             att.PropertyAccessor.SetProperty("http://schemas.microsoft.com/mapi/proptag/0x3712001F", cid)
                         except Exception:
                             # 忽略无法设置属性的情况
@@ -1573,6 +1677,15 @@ class OutlookDraftManager:
             
             # 保存为草稿（不发送）
             mail.Save()
+            mail.Display() # 显示草稿窗口
+
+            # 清理临时生成的智能截图
+            for img in temp_inline_images:
+                try:
+                    if os.path.exists(img['path']):
+                        os.remove(img['path'])
+                except:
+                    pass
             
             # 清理内嵌图片记录（防止传递到下一个草稿）
             self.cleanup_inline_images()
@@ -1605,6 +1718,9 @@ class OutlookDraftManager:
              messagebox.showwarning("警告", "请先选择 Excel 文件")
              return
         
+        # 处理路径中的占位符
+        excel_paths_str = self.process_template_variables(excel_paths_str)
+
         file_paths = excel_paths_str.split(';')
         count = 0
         for path in file_paths:
@@ -1769,6 +1885,9 @@ class OutlookDraftManager:
     def generate_excel_images(self):
         """生成Excel截图，返回图片路径列表"""
         excel_paths_str = self.excel_path_var.get()
+        # 处理路径中的占位符
+        excel_paths_str = self.process_template_variables(excel_paths_str)
+
         sheet_name = self.sheet_combo.get()
         data_range = self.range_var.get().strip()
         
@@ -1801,36 +1920,15 @@ class OutlookDraftManager:
         return generated_images
 
     def paste_as_picture(self):
-        """粘贴为图片（Picture）- 将 Excel 数据转换为图片并嵌入"""
+        """插入 {SMART_IMAGE} 占位符"""
         # 获取当前设置
         if not self.excel_path_var.get() or not self.sheet_combo.get() or not self.range_var.get():
              messagebox.showwarning("警告", "请先选择 Excel 文件、工作表和数据范围")
              return
 
         try:
-            # 清理旧的内嵌图片
-            self.cleanup_inline_images()
-            
-            self.status_var.set("正在通过 Excel 生成图片...")
-            self.root.update()
-            
-            generated_images = self.generate_excel_images()
-            
-            if not generated_images:
-                raise RuntimeError("未能生成图片，请检查 Excel 是否安装或范围是否正确")
-
-            # 插入图片到正文
-            html_fragments = []
-            for img_path in generated_images:
-                cid = f"img_{uuid.uuid4().hex}@local"
-                self.inline_images.append({'path': img_path, 'cid': cid})
-                img_tag = f'<img src="cid:{cid}" alt="Excel表格" style="max-width:100%; border:1px solid #ccc;"><br/>'
-                html_fragments.append(img_tag)
-                
-                if img_path not in self.attachments:
-                    self.attachments.append(img_path)
-            
-            full_html = "\n".join(html_fragments)
+            # 简化逻辑：直接插入 {SMART_IMAGE} 占位符
+            self.status_var.set("已插入智能截图占位符")
             
             # 获取当前正文内容
             try:
@@ -1838,35 +1936,30 @@ class OutlookDraftManager:
             except:
                 body = ""
             
+            placeholder = "{SMART_IMAGE}"
+            
+            # 使用不区分大小写的检查
+            if placeholder.lower() in body.lower():
+                messagebox.showinfo("提示", f"{placeholder} 占位符已存在于正文中。")
+                return
+
+            # 如果存在 {EXCEL_DATA} 或 {EXCEL_IMAGE}，询问替换
             if "{EXCEL_DATA}" in body:
-                new_body = body.replace("{EXCEL_DATA}", full_html)
+                new_body = body.replace("{EXCEL_DATA}", placeholder)
                 self.body_text.delete(1.0, tk.END)
                 self.body_text.insert(1.0, new_body)
             elif "{EXCEL_IMAGE}" in body:
-                # 如果用户已经使用了占位符，提示是否替换
-                if messagebox.askyesno("提示", "检测到 {EXCEL_IMAGE} 占位符。\n是否直接替换为图片？\n(选择'否'将保留占位符，在创建草稿时自动生成)") :
-                    new_body = body.replace("{EXCEL_IMAGE}", full_html)
-                    self.body_text.delete(1.0, tk.END)
-                    self.body_text.insert(1.0, new_body)
-                else:
-                    # 用户选择保留占位符，不做任何修改
-                    messagebox.showinfo("提示", "已保留 {EXCEL_IMAGE} 占位符。\n图片将在创建草稿时自动生成。")
-                    return
+                new_body = body.replace("{EXCEL_IMAGE}", placeholder)
+                self.body_text.delete(1.0, tk.END)
+                self.body_text.insert(1.0, new_body)
             else:
-                if body:
-                    self.body_text.insert(tk.END, "\n\n" + full_html)
-                else:
-                    self.body_text.insert(1.0, full_html)
+                # 追加到光标位置或结尾
+                self.body_text.insert(tk.INSERT, "\n" + placeholder + "\n")
             
-            self.update_attachment_list()
-            messagebox.showinfo("成功", "已粘贴为图片（保留源格式）")
-            self.status_var.set("已粘贴为图片")
-
+            messagebox.showinfo("成功", f"已插入 {placeholder} 占位符。\n\n在生成草稿时，此处将自动替换为最新的 Excel 截图。")
+            
         except Exception as e:
-            import traceback
-            error_details = traceback.format_exc()
-            messagebox.showerror("错误", f"粘贴为图片失败:\n{str(e)}\n\n详细信息:\n{error_details}")
-            self.status_var.set("粘贴失败")
+            messagebox.showerror("错误", f"操作失败: {str(e)}")
     
     def generate_formatted_html_table(self, data_rows):
         """生成带格式的 HTML 表格（模拟 Keep Source Formatting）- 使用 Excel 实际列宽"""
@@ -2114,6 +2207,46 @@ class OutlookDraftManager:
             headers = self.current_excel_data[0]
             created_count = 0
             
+            # 智能匹配逻辑 - 用于 {SMART_IMAGE} 和数据源
+            processed_excel_paths = self.process_template_variables(self.excel_path_var.get())
+            current_excel_path = processed_excel_paths.split(';')[0]
+            sheet_name = self.sheet_combo.get()
+            data_range = self.range_var.get()
+
+            # --- 全流程数据一致性处理 ---
+            # 如果开启了智能匹配，或即使没开启，为了确保数据和截图的一致性，
+            # 这里强制使用解析后的路径重新读取数据。
+            
+            if self.smart_match_var.get() and current_excel_path:
+                latest_path = self.get_latest_file_in_folder(current_excel_path)
+                if latest_path != current_excel_path:
+                    print(f"Batch Create: Switching {current_excel_path} -> {latest_path}")
+                    current_excel_path = latest_path
+            
+            # 自动重新读取数据，确保 Self.current_excel_data 是最新的
+            # 并且来自正确的 current_excel_path
+            if current_excel_path and os.path.exists(current_excel_path):
+                 print(f"Reloading data from: {current_excel_path} for consistency...")
+                 result, error = self._internal_read_excel(current_excel_path, sheet_name, data_range)
+                 if result:
+                     rows, _ = result
+                     if rows and len(rows) > 1:
+                         self.current_excel_data = rows
+                         headers = rows[0] # 更新表头
+                     else:
+                         print("Warning: Reloaded data is empty or insufficient.")
+                 else:
+                     print(f"Warning: Failed to reload data: {error}")
+
+
+            # 预先处理 {SMART_IMAGE}
+            # 这会生成一个通用的截图用于所有批量邮件
+            smart_img_info = None
+            if "{SMART_IMAGE}" in body_template:
+                body_template, smart_img_info = self.process_smart_image_logic(
+                    body_template, current_excel_path, sheet_name, data_range
+                )
+
             # 预先生成图片（如果需要且是静态的）
             # 这里我们假设批量邮件使用相同的Excel截图（来自配置的范围）
             batch_images = []
@@ -2195,9 +2328,27 @@ class OutlookDraftManager:
                         except:
                             pass
                 
+                # 添加 {SMART_IMAGE} 图片
+                if smart_img_info:
+                    path = smart_img_info['path']
+                    cid = smart_img_info['cid']
+                    if os.path.exists(path):
+                        try:
+                            att = mail.Attachments.Add(path)
+                            att.PropertyAccessor.SetProperty("http://schemas.microsoft.com/mapi/proptag/0x3712001F", cid)
+                        except:
+                            pass
+                
                 mail.Save()
                 created_count += 1
             
+            # 清理智能截图临时文件
+            if smart_img_info and os.path.exists(smart_img_info['path']):
+                try:
+                    os.remove(smart_img_info['path'])
+                except:
+                    pass
+
             messagebox.showinfo("成功", f"成功创建 {created_count} 封草稿邮件！")
             self.status_var.set(f"批量创建完成 - {created_count} 封草稿")
             
@@ -2523,33 +2674,7 @@ class OutlookDraftManager:
                     log_message(f"开始处理配置: {config_name}")
                     
                     config = self.configs[config_name]
-
-                    # --- [New Feature] 动态加载最新 Excel 文件 ---
-                    excel_path = config.get('excel_path', '')
-                    original_excel_path = excel_path
-                    if config.get('use_dynamic_latest', False):
-                        try:
-                            # 传入配置中的关键词
-                            keywords = config.get('filename_keywords', '')
-                            found_latest = self.get_latest_excel_file(excel_path, keywords=keywords)
-                            if found_latest and os.path.exists(found_latest):
-                                excel_path = found_latest
-                                log_message(f"  ✓ 自动切换到最新文件: {os.path.basename(excel_path)}")
-                                
-                                # 同时更新附件列表：如果原配置里附件包含了旧的Excel文件，尝试替换为新的
-                                new_attachments = []
-                                for att in config.get('attachments', []):
-                                    # 如果附件路径与原配置的Excel路径相同（或在同一文件夹且是Excel），则替换
-                                    if att == original_excel_path or (original_excel_path and att in original_excel_path.split(';')):
-                                        new_attachments.append(excel_path)
-                                    else:
-                                        new_attachments.append(att)
-                                attachments = new_attachments
-                        except Exception as e:
-                            log_message(f"  ⚠ 查找最新文件失败: {e}", "ERROR")
-                    else:
-                        attachments = config.get('attachments', [])
-
+                    
                     # 加载配置数据（支持列表和字符串两种格式）
                     to_data = config.get('to', [])
                     cc_data = config.get('cc', [])
@@ -2588,24 +2713,36 @@ class OutlookDraftManager:
                         continue
                     
                     # 读取Excel数据（如果有）
-                    # excel_path 已经在上面处理过了
+                    # 方案一：智能匹配最新文件
+                    smart_match = config.get("smart_match", False)
+                    filename_keyword = config.get("filename_keyword", "") # 获取该配置的关键词
+                    excel_path_raw = config.get('excel_path', '')
                     sheet_name = config.get('sheet_name', '')
                     data_range = config.get('data_range', '')
                     
-                    excel_data = None
-                    # 如果需要读取数据（有路径且有Sheet名）
-                    if excel_path and os.path.exists(excel_path) and sheet_name:
-                         # 简单的Sheet回退逻辑 (防止配置的Sheet在最新文件中不存在)
-                        try:
-                            # 预检查Sheet是否存在
-                             wb_tmp = openpyxl.load_workbook(excel_path, read_only=True)
-                             if sheet_name not in wb_tmp.sheetnames and wb_tmp.sheetnames:
-                                 old_sheet = sheet_name
-                                 sheet_name = wb_tmp.sheetnames[0]
-                                 log_message(f"  ⚠ Sheet '{old_sheet}' 不存在，自动使用 '{sheet_name}'")
-                             wb_tmp.close()
-                        except: pass
+                    # 确保提取单个路径 (以防配置中保存了多个以分号分隔的路径)
+                    excel_path = excel_path_raw.split(';')[0].strip() if excel_path_raw else ""
+                    
+                    if smart_match and excel_path:
+                        # 传入具体的关键词，而不是使用 UI 全局变量
+                        latest_path = self.get_latest_file_in_folder(excel_path, keyword=filename_keyword)
+                        if latest_path and latest_path != excel_path:
+                            log_message(f"  ⚡ 智能匹配: {os.path.basename(latest_path)}")
+                            excel_path = latest_path
 
+                    # 方案二：处理 {SMART_IMAGE} (在读取 Excel 数据前处理)
+                    temp_inline_images = []
+                    if "{SMART_IMAGE}" in body:
+                        log_message(f"  🖼 正在生成智能截图...")
+                        body, smart_img_info = self.process_smart_image_logic(
+                            body, excel_path, sheet_name, data_range
+                        )
+                        if smart_img_info:
+                            temp_inline_images.append(smart_img_info)
+                        else:
+                            log_message(f"  ⚠ 智能截图生成失败", "ERROR")
+                    
+                    excel_data = None
                     if excel_path and os.path.exists(excel_path) and sheet_name and data_range:
                         try:
                             wb = openpyxl.load_workbook(excel_path, read_only=True, data_only=True)
@@ -2630,155 +2767,127 @@ class OutlookDraftManager:
                         except Exception as e:
                             log_message(f"  ⚠ Excel读取失败: {str(e)}", "ERROR")
                     
-                    # 判断是否为批量模式（Excel数据行数>1）
-                    if excel_data and len(excel_data) > 1:
-                        # 批量模式：为每行数据创建一封邮件
-                        headers = excel_data[0]
-                        draft_count = 0
-                        
-                        for row_data in excel_data[1:]:
-                            variables = {"{" + str(headers[i]) + "}": str(row_data[i]) 
-                                       for i in range(min(len(headers), len(row_data)))}
-                            
-                            subject_filled = subject
-                            body_filled = body
-                            
-                            # 处理收件人列表中的变量
-                            to_filled_list = []
-                            for email in to_list:
-                                email_filled = email
-                                for placeholder, value in variables.items():
-                                    email_filled = email_filled.replace(placeholder, value)
-                                to_filled_list.append(email_filled)
-                            
-                            for placeholder, value in variables.items():
-                                subject_filled = subject_filled.replace(placeholder, value)
-                                body_filled = body_filled.replace(placeholder, value)
-                            
-                            # 处理模板变量
-                            subject_filled = subject_filled.replace("{DATE}", datetime.now().strftime("%Y-%m-%d"))
-                            body_filled = body_filled.replace("{DATE}", datetime.now().strftime("%Y-%m-%d"))
-                            body_filled = body_filled.replace("{TIME}", datetime.now().strftime("%H:%M:%S"))
-                            
-                            # 替换自定义占位符
-                            for name, value in self.custom_placeholders.items():
-                                subject_filled = subject_filled.replace("{" + name + "}", str(value))
-                                body_filled = body_filled.replace("{" + name + "}", str(value))
-                            
-                            # 创建邮件
-                            mail = outlook.CreateItem(0)
-                            mail.To = "; ".join(to_filled_list)
-                            if cc_list:
-                                mail.CC = "; ".join(cc_list)
-                            if bcc_list:
-                                mail.BCC = "; ".join(bcc_list)
-                            
-                            # 应用发送选项
-                            if config.get("high_priority", False):
-                                mail.Importance = 2
-                            if config.get("read_receipt", False):
-                                mail.ReadReceiptRequested = True
-                                
-                            mail.Subject = subject_filled
-                            mail.HTMLBody = body_filled.replace("\n", "<br>")
-                            
-                            for att_path in attachments:
-                                if os.path.exists(att_path):
-                                    mail.Attachments.Add(att_path)
-                            
-                            # 添加内嵌图片 (来自粘贴图片)
-                            if inline_images_config:
-                                for img in inline_images_config:
-                                    path = img.get('path')
-                                    cid = img.get('cid')
-                                    if path and cid and os.path.exists(path):
-                                        try:
-                                            att = mail.Attachments.Add(path)
-                                            # PR_ATTACH_CONTENT_ID (0x3712001F) 指定附件的 Content-ID
-                                            att.PropertyAccessor.SetProperty("http://schemas.microsoft.com/mapi/proptag/0x3712001F", cid)
-                                        except:
-                                            pass
-
-                            mail.Save()
-                            draft_count += 1
-                        
-                        log_message(f"  ✓ 成功批量生成 {draft_count} 封草稿")
-                        success_count += 1
+                    # === 核心修改：确保每个配置只生成一个草稿 ===
+                    # 无论Excel有多少行数据，只取第一行数据（如果有）来替换变量
+                    # 并生成一封邮件，而不是进行邮件合并操作
                     
-                    # 单封模式（普通模式/非批量数据）
-                    else:
-                        # 创建单封邮件
-                        mail = outlook.CreateItem(0)
+                    # 1. 准备变量字典
+                    variables = {}
+                    # 添加Excel第一行数据的变量
+                    if excel_data and len(excel_data) > 1:
+                        headers = excel_data[0]
+                        first_row = excel_data[1]
+                        for i in range(min(len(headers), len(first_row))):
+                            variables["{" + str(headers[i]) + "}"] = str(first_row[i])
+                    
+                    # 添加自定义占位符
+                    for k, v in self.custom_placeholders.items():
+                        variables["{" + str(k) + "}"] = str(v)
                         
-                        # 替换变量（仅自定义变量和日期时间）
-                        subject_filled = subject
-                        body_filled = body
-                        
-                        # 自定义占位符替换
-                        custom_vars = config.get("custom_placeholders", {})
-                        for name, value in custom_vars.items():
-                            placeholder = "{" + name + "}"
-                            subject_filled = subject_filled.replace(placeholder, str(value))
-                            body_filled = body_filled.replace(placeholder, str(value))
-                            
-                        # 常规变量替换
-                        subject_filled = subject_filled.replace("{DATE}", datetime.now().strftime("%Y-%m-%d"))
-                        body_filled = body_filled.replace("{DATE}", datetime.now().strftime("%Y-%m-%d"))
-                        
-                        mail.To = "; ".join(to_list)
-                        if cc_list:
-                             mail.CC = "; ".join(cc_list)
-                        if bcc_list:
-                             mail.BCC = "; ".join(bcc_list)
-                        
-                        # 应用发送选项
-                        if config.get("high_priority", False):
-                            mail.Importance = 2
-                        if config.get("read_receipt", False):
-                            mail.ReadReceiptRequested = True
-                        
-                        mail.Subject = subject_filled
-                        
-                        # --- [New Feature] 批量模式下的 {SMART_IMAGE} 处理 ---
-                        if "{SMART_IMAGE}" in body_filled and excel_path and os.path.exists(excel_path) and sheet_name and data_range:
-                            try:
-                                # 生成截图
-                                log_message("  ... 正在尝试生成 Smart Image")
-                                s_img_path = self.copy_range_as_image_com(excel_path, sheet_name, data_range)
-                                if s_img_path:
-                                    s_cid = f"smart_batch_{uuid.uuid4().hex}@local"
-                                    # 插入标签
-                                    s_tag = f'<img src="cid:{s_cid}" alt="SmartImage" style="max-width:100%; border:1px solid #ddd;"><br/>'
-                                    body_filled = body_filled.replace("{SMART_IMAGE}", s_tag)
-                                    
-                                    # 添加到附件并设置CID
-                                    att = mail.Attachments.Add(s_img_path)
-                                    att.PropertyAccessor.SetProperty("http://schemas.microsoft.com/mapi/proptag/0x3712001F", s_cid)
-                            except Exception as e:
-                                log_message(f"  ⚠ Smart Image 生成失败: {e}", "ERROR")
+                    config_vars = config.get("custom_placeholders", {})
+                    for k, v in config_vars.items():
+                        variables["{" + str(k) + "}"] = str(v)
 
-                        mail.HTMLBody = body_filled.replace("\n", "<br>")
-                        
-                        # 添加附件
-                        for attachment_path in attachments:
-                            if os.path.exists(attachment_path):
-                                mail.Attachments.Add(attachment_path)
+                    # 2. 替换变量 (主题和正文)
+                    subject_filled = subject
+                    body_filled = body
+
+                    # 处理收件人 (支持变量)
+                    to_filled_list = []
+                    for email in to_list:
+                        email_filled = email
+                        for k, v in variables.items():
+                             email_filled = email_filled.replace(k, str(v))
+                        to_filled_list.append(email_filled)
+                    
+                    # 替换一般变量
+                    for k, v in variables.items():
+                        subject_filled = subject_filled.replace(k, str(v))
+                        body_filled = body_filled.replace(k, str(v))
+                    
+                    # 处理时间日期变量
+                    curr_time = datetime.now()
+                    subject_filled = subject_filled.replace("{DATE}", curr_time.strftime("%Y-%m-%d"))
+                    subject_filled = subject_filled.replace("{TIME}", curr_time.strftime("%H:%M:%S"))
+                    body_filled = body_filled.replace("{DATE}", curr_time.strftime("%Y-%m-%d"))
+                    body_filled = body_filled.replace("{TIME}", curr_time.strftime("%H:%M:%S"))
+
+                    # 构建邮件
+                    mail = outlook.CreateItem(0)
+                    mail.To = "; ".join(to_filled_list)
+                    if cc_list:
+                         mail.CC = "; ".join(cc_list)
+                    if bcc_list:
+                         mail.BCC = "; ".join(bcc_list)
+                    
+                    if config.get("high_priority", False):
+                        mail.Importance = 2
+                    if config.get("read_receipt", False):
+                        mail.ReadReceiptRequested = True
+
+                    mail.Subject = subject_filled
+                    
+                    # 3. 处理正文特殊内容
+                    body_html = body_filled
+                    
+                    # 处理 {EXCEL_DATA} 表格插入
+                    if "{EXCEL_DATA}" in body_html and excel_data:
+                        # 尝试使用内置格式化方法
+                        try:
+                            html_table = self.generate_formatted_html_table(excel_data)
+                            body_html = body_html.replace("{EXCEL_DATA}", html_table)
+                        except:
+                            # 失败则使用简单表格
+                            html_table = "<table border='1'><tr>" + "</tr><tr>".join(["".join([f"<td>{c}</td>" for c in r]) for r in excel_data]) + "</tr></table>"
+                            body_html = body_html.replace("{EXCEL_DATA}", html_table)
+                    
+                    # 处理 {EXCEL_IMAGE}
+                    # 批量模式下暂不支持动态生成 Excel 截图，除非配置中已有
+                    # 这里主要依靠之前的 self.process_template_variables 逻辑或静态添加
+                    
+                    # 替换换行
+                    body_html = body_html.replace("\n", "<br>")
+                    
+                    mail.HTMLBody = body_html
+                    
+                    # 4. 添加附件和内嵌图片
+                    
+                    # 准备附件列表
+                    final_attachments = attachments.copy()
+                    # 如果配置要求附带源文件，且文件存在
+                    if config.get("attach_excel", False) and excel_path and os.path.exists(excel_path):
+                        if excel_path not in final_attachments:
+                            final_attachments.append(excel_path)
+                            
+                    # 普通附件
+                    for att_path in final_attachments:
+                        if os.path.exists(att_path):
+                            mail.Attachments.Add(att_path)
+                            
+                    # 内嵌图片 (Config自带 + Smart Image)
+                    combined_inline_pics = inline_images_config + temp_inline_images
+                    for img in combined_inline_pics:
+                        path = img.get('path')
+                        cid = img.get('cid')
+                        if path and cid and os.path.exists(path):
+                            try:
+                                att = mail.Attachments.Add(path)
+                                att.PropertyAccessor.SetProperty("http://schemas.microsoft.com/mapi/proptag/0x3712001F", cid)
+                            except:
+                                pass
                                 
-                        # 添加内嵌图片 (来自粘贴图片)
-                        if inline_images_config:
-                            for img in inline_images_config:
-                                path = img.get('path')
-                                cid = img.get('cid')
-                                if path and cid and os.path.exists(path):
-                                    try:
-                                        att = mail.Attachments.Add(path)
-                                        att.PropertyAccessor.SetProperty("http://schemas.microsoft.com/mapi/proptag/0x3712001F", cid)
-                                    except:
-                                        pass
-                        
-                        mail.Save()
-                        success_count += 1
-                        log_message(f"  ✓ 成功创建单封草稿")
+                    mail.Save()
+                    
+                    log_message(f"  ✓ 已创建草稿: {subject_filled}")
+                    success_count += 1
+
+                    # 清理本次配置生成的临时截图
+                    for img in temp_inline_images:
+                        try:
+                            if os.path.exists(img['path']):
+                                os.remove(img['path'])
+                        except:
+                            pass
 
                 except Exception as e:
                     log_message(f"  ❌ 处理失败: {str(e)}", "ERROR")
@@ -3226,11 +3335,14 @@ class OutlookDraftManager:
         menu.add_command(label="📆 {DATETIME} - 日期时间", 
                         command=lambda: self.insert_placeholder(entry_widget, "{DATETIME}"))
         
+        # 特殊功能占位符 (仅正文可用，但也允许在其他地方插入，由用户决定)
         menu.add_separator()
-        menu.add_command(label="📸 {SMART_IMAGE} - 自动最新截图 (仅正文)", 
+        menu.add_command(label="🖼 {SMART_IMAGE} - 智能截图 (自动截取Excel范围)", 
                         command=lambda: self.insert_placeholder(entry_widget, "{SMART_IMAGE}"))
-        menu.add_command(label="📊 {EXCEL_DATA} - 插入数据表格 (仅正文)", 
+        menu.add_command(label="📊 {EXCEL_DATA} - Excel数据表格", 
                         command=lambda: self.insert_placeholder(entry_widget, "{EXCEL_DATA}"))
+        menu.add_command(label="📷 {EXCEL_IMAGE} - Excel截图 (静态)", 
+                        command=lambda: self.insert_placeholder(entry_widget, "{EXCEL_IMAGE}"))
         
         # 自定义占位符
         if hasattr(self, 'custom_placeholders') and self.custom_placeholders:
@@ -3334,8 +3446,6 @@ class OutlookDraftManager:
                         command=lambda: text_widget.insert(tk.INSERT, "{EXCEL_DATA}"))
         menu.add_command(label="🖼️ {EXCEL_IMAGE} - 插入Excel截图", 
                         command=lambda: text_widget.insert(tk.INSERT, "{EXCEL_IMAGE}"))
-        menu.add_command(label="📸 {SMART_IMAGE} - 自动最新截图 (推荐)", 
-                        command=lambda: text_widget.insert(tk.INSERT, "{SMART_IMAGE}"))
         
         menu.add_separator()
         
@@ -3601,9 +3711,6 @@ class OutlookDraftManager:
         # 说明文本
         ttk.Label(dialog, text="管理自定义占位符 (可在主题或正文中使用 {占位符名})", 
                  font=('TkDefaultFont', 10, 'bold')).pack(pady=(10, 5), padx=10)
-        
-        ttk.Label(dialog, text="系统内置: {SMART_IMAGE} (自动最新图片), {EXCEL_DATA} (表格), {EXCEL_IMAGE} (手动图片), {DATE}, {TIME}", 
-                 foreground="gray", wraplength=550).pack(pady=2)
         
         # 列表区域
         list_frame = ttk.Frame(dialog)

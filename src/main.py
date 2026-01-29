@@ -2764,7 +2764,30 @@ class OutlookDraftManager:
                     
                     # 确保提取单个路径 (以防配置中保存了多个以分号分隔的路径)
                     excel_path = excel_path_raw.split(';')[0].strip() if excel_path_raw else ""
-                    
+
+                    # === 修复：预处理 Excel 路径中的占位符 ===
+                    # 必须在智能匹配和读取之前解析路径中的 {year}, {data} 等变量
+                    if excel_path:
+                        # 1. 准备变量字典 (合并全局和配置特有的)
+                        path_vars = {
+                            "{date}": datetime.now().strftime("%Y-%m-%d"),
+                            "{time}": datetime.now().strftime("%H:%M:%S"),
+                            "{datetime}": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        }
+                        
+                        # 全局自定义变量
+                        for k, v in self.custom_placeholders.items():
+                             path_vars["{" + str(k) + "}"] = str(v)
+                             
+                        # 配置特定变量
+                        config_spec_vars = config.get("custom_placeholders", {})
+                        for k, v in config_spec_vars.items():
+                            path_vars["{" + str(k) + "}"] = str(v)
+                        
+                        # 2. 执行替换 (不区分大小写)
+                        for k, v in path_vars.items():
+                            excel_path = re.sub(re.escape(k), str(v), excel_path, flags=re.IGNORECASE)
+
                     if smart_match and excel_path:
                         # 传入具体的关键词，而不是使用 UI 全局变量
                         latest_path = self.get_latest_file_in_folder(excel_path, keyword=filename_keyword)

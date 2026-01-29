@@ -1370,7 +1370,8 @@ class OutlookDraftManager:
         """
         方案一（增强版）：
         1. 关键词寻址：如果设置了关键词，只匹配包含关键词的文件。
-        2. 智能文件夹切换：检测是否有更新的同级文件夹（如 2024-01 -> 2024-02），如果有则切换。
+        2. 占位符处理：如果文件名包含未解析的 {xxx}，自动转换为通配符 * 进行搜索。
+        3. 智能文件夹切换：检测是否有更新的同级文件夹（如 2024-01 -> 2024-02），如果有则切换。
         Params:
             keyword (str, optional): 覆盖UI的关键词设置，用于批量处理时传入特定配置的关键词。
         """
@@ -1379,8 +1380,25 @@ class OutlookDraftManager:
         
         try:
             path_obj = Path(excel_path)
+            
+            # --- 增强逻辑：处理路径中未解析的占位符 ---
+            # 如果路径本身不存在，可能是因为包含占位符。我们尝试解析它。
+            # 如果 folder 部分包含占位符且不存在，我们无能为力（除非遍历上级目录，太复杂暂不处理）
+            # 我们重点处理 filename 部分的占位符
+            
             current_folder = path_obj.parent
+            if not current_folder.exists():
+                return excel_path # 文件夹都不存在，直接返回原路径（后续会报错）
+
             suffix = path_obj.suffix
+            stem = path_obj.stem
+            
+            # 自动生成通配符模式：将 MyFile_{data}.xlsx 转换为 MyFile_*.xlsx
+            # 只有当文件名包含 { } 时才触发
+            wildcard_pattern = ""
+            if "{" in stem and "}" in stem:
+                wildcard_pattern = re.sub(r'\{.*?\}', '*', stem) + suffix
+                # print(f"DEBUG: Converted placeholder path to wildcard: {wildcard_pattern}")
             
             # 获取配置的关键词 (优先使用传入参数，否则使用UI)
             if keyword is None:
@@ -1389,6 +1407,7 @@ class OutlookDraftManager:
                 keyword = keyword.strip()
             
             # --- 步骤 1: 优先在当前定位文件夹中查找 ---
+            
             # 策略 A: 精确匹配 (带关键词)
             if keyword:
                 search_pattern = f"*{keyword}*{suffix}"
@@ -1397,7 +1416,15 @@ class OutlookDraftManager:
                     files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
                     return str(files[0])
             
-            # 策略 B: 如果没找到带关键词的，或者没设置关键词 -> 查找最新的文件
+            # 策略 B: 使用文件名转换的通配符 (处理 {data} -> *)
+            if wildcard_pattern:
+                files = list(current_folder.glob(wildcard_pattern))
+                if files:
+                    files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+                    # print(f"DEBUG: Found file using wildcard: {files[0]}")
+                    return str(files[0])
+            
+            # 策略 C: 如果没找到带关键词的，或者没设置关键词 -> 查找最新的文件
             # 用户要求："如果没有,再尋找文件里面最新修改时间的文件"
             fallback_pattern = f"*{suffix}"
             files = list(current_folder.glob(fallback_pattern))
@@ -2131,18 +2158,32 @@ class OutlookDraftManager:
             messagebox.showerror("错误", f"操作失败: {e}")
     
     def process_template_variables(self, text):
-        """处理模板变量"""
-        # 替换日期时间
-        text = text.replace("{DATE}", datetime.now().strftime("%Y-%m-%d"))
-        text = text.replace("{TIME}", datetime.now().strftime("%H:%M:%S"))
-        text = text.replace("{DATETIME}", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        """处理模板变量 (增强版：不区分大小写)"""
+        if not text:
+            return ""
+            
+        # 预处理：大小写不敏感替换内置变量
+        # 构建映射避免多次遍历
+        replacements = {
+            "{date}": datetime.now().strftime("%Y-%m-%d"),
+            "{time}": datetime.now().strftime("%H:%M:%S"),
+            "{datetime}": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        
+        # 使用正则进行不区分大小写的替换
+        for key, val in replacements.items():
+            pattern = re.compile(re.escape(key), re.IGNORECASE)
+            text = pattern.sub(val, text)
         
         # 替换自定义占位符
         for name, value in self.custom_placeholders.items():
             placeholder = "{" + name + "}"
-            text = text.replace(placeholder, str(value))
+            # 尝试不区分大小写匹配自定义占位符名
+            pattern = re.compile(re.escape(placeholder), re.IGNORECASE)
+            text = pattern.sub(str(value), text)
         
-        # 如果有Excel数据，替换列名变量
+        # 如果有Excel数据，替换列名变量 (保持原逻辑，列名 usually Case Sensitive in logic but user might expect loose)
+        # 这里为了稳妥，暂保持列名精确匹配，除非用户反馈
         if self.current_excel_data and len(self.current_excel_data) > 0:
             headers = self.current_excel_data[0] if len(self.current_excel_data) > 0 else []
             if len(self.current_excel_data) > 1:
@@ -2150,6 +2191,7 @@ class OutlookDraftManager:
                 for i, header in enumerate(headers):
                     if i < len(first_data_row):
                         placeholder = "{" + str(header) + "}"
+                        # 这里还是建议精确匹配，因为表头通常是固定的
                         text = text.replace(placeholder, str(first_data_row[i]))
         
         return text

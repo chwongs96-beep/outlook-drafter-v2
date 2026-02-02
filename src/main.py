@@ -30,6 +30,60 @@ import threading
 import time
 
 
+class ScrollableFrame(ttk.Frame):
+    """可滚动的Frame容器"""
+    def __init__(self, container, *args, **kwargs):
+        super().__init__(container, *args, **kwargs)
+        self.canvas = tk.Canvas(self, borderwidth=0, highlightthickness=0)
+        self.scrollbar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
+        self.scrollable_frame = ttk.Frame(self.canvas)
+
+        self.scrollable_frame.bind(
+            "<Configure>",
+            lambda e: self.canvas.configure(
+                scrollregion=self.canvas.bbox("all")
+            )
+        )
+
+        self.canvas_frame = self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+
+        self.canvas.configure(yscrollcommand=self.scrollbar.set)
+
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.scrollbar.pack(side="right", fill="y")
+        
+        # 绑定Canvas大小变化，调整内部Frame宽度
+        self.canvas.bind('<Configure>', self._on_canvas_configure)
+        
+        # 绑定鼠标滚轮 (仅当鼠标在区域内时)
+        self.scrollable_frame.bind("<Enter>", self._bind_to_mousewheel)
+        self.scrollable_frame.bind("<Leave>", self._unbind_from_mousewheel)
+
+    def _on_canvas_configure(self, event):
+        # 设置内部frame宽度等于canvas宽度
+        self.canvas.itemconfig(self.canvas_frame, width=event.width)
+
+    def _bind_to_mousewheel(self, event):
+        self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
+        self.canvas.bind_all("<Button-4>", self._on_mousewheel)
+        self.canvas.bind_all("<Button-5>", self._on_mousewheel)
+
+    def _unbind_from_mousewheel(self, event):
+        self.canvas.unbind_all("<MouseWheel>")
+        self.canvas.unbind_all("<Button-4>")
+        self.canvas.unbind_all("<Button-5>")
+
+    def _on_mousewheel(self, event):
+        # 检查是否还有其他滚动的Widget在焦点下 (例如 Text)
+        # 简单处理：总是滚动
+        if event.num == 4:
+            self.canvas.yview_scroll(-1, "units")
+        elif event.num == 5:
+            self.canvas.yview_scroll(1, "units")
+        else:
+            self.canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+
+
 class ToolTip:
     """控件悬停提示工具类"""
     def __init__(self, widget, text):
@@ -224,12 +278,16 @@ class OutlookDraftManager:
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
-        # 创建选项卡
-        self.tab_config = ttk.Frame(self.notebook)
-        self.tab_compose = ttk.Frame(self.notebook)
+        # 创建可滚动的选项卡容器
+        self.tab_config_wrapper = ScrollableFrame(self.notebook)
+        self.tab_compose_wrapper = ScrollableFrame(self.notebook)
         
-        self.notebook.add(self.tab_config, text="⚙️ 设置与数据")
-        self.notebook.add(self.tab_compose, text="✉️ 邮件编辑")
+        self.notebook.add(self.tab_config_wrapper, text="⚙️ 设置与数据")
+        self.notebook.add(self.tab_compose_wrapper, text="✉️ 邮件编辑")
+        
+        # 将实际内容放入可滚动区域
+        self.tab_config = self.tab_config_wrapper.scrollable_frame
+        self.tab_compose = self.tab_compose_wrapper.scrollable_frame
         
         # --- Tab 1: 设置与数据 ---
         self.setup_config_tab()
@@ -1574,10 +1632,17 @@ class OutlookDraftManager:
     
     def create_draft(self):
         """创建Outlook草稿"""
-        # 获取邮箱地址
-        to_list = [x.strip() for x in self.to_entry_var.get().split(';') if x.strip()]
-        cc_list = [x.strip() for x in self.cc_entry_var.get().split(';') if x.strip()]
-        bcc_list = [x.strip() for x in self.bcc_entry_var.get().split(';') if x.strip()]
+        # 获取并处理邮箱地址中的变量
+        to_raw = self.to_entry_var.get()
+        cc_raw = self.cc_entry_var.get()
+        bcc_raw = self.bcc_entry_var.get()
+        
+        to_processed = self.process_template_variables(to_raw)
+        cc_processed = self.process_template_variables(cc_raw)
+        bcc_processed = self.process_template_variables(bcc_raw)
+        
+        # 用于验证
+        to_list = [x.strip() for x in to_processed.split(';') if x.strip()]
         
         subject = self.subject_var.get().strip()
         body_template = self.body_text.get(1.0, tk.END).strip()
@@ -1620,12 +1685,12 @@ class OutlookDraftManager:
             # 创建邮件对象
             mail = outlook.CreateItem(0)  # 0 代表邮件项
             
-            # 设置收件人（用分号分隔）
-            mail.To = "; ".join(to_list)
-            if cc_list:
-                mail.CC = "; ".join(cc_list)
-            if bcc_list:
-                mail.BCC = "; ".join(bcc_list)
+            # 设置收件人
+            mail.To = to_processed
+            if cc_processed:
+                mail.CC = cc_processed
+            if bcc_processed:
+                mail.BCC = bcc_processed
             
             # 设置优先级和已读回执
             if self.priority_var.get():

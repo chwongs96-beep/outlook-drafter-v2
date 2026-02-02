@@ -16,13 +16,14 @@ from pathlib import Path
 import shutil
 # Pillow for image rendering
 try:
-    from PIL import Image, ImageDraw, ImageFont
+    from PIL import Image, ImageDraw, ImageFont, ImageTk
     from PIL import ImageGrab
 except Exception:
     Image = None
     ImageDraw = None
     ImageFont = None
     ImageGrab = None
+    ImageTk = None
 import tempfile
 import uuid
 import threading
@@ -441,6 +442,7 @@ class OutlookDraftManager:
         toolbar = ttk.Frame(body_frame)
         toolbar.pack(fill=tk.X, pady=2)
         ttk.Button(toolbar, text="插入占位符", command=lambda: self.show_placeholder_menu(self.body_editor)).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="占位符管理", command=self.manage_placeholders).pack(side=tk.LEFT, padx=2)
         ttk.Button(toolbar, text="模板管理", command=self.manage_content_templates).pack(side=tk.LEFT, padx=2)
         ttk.Button(toolbar, text="签名管理", command=self.manage_signatures).pack(side=tk.LEFT, padx=2)
         
@@ -2157,8 +2159,11 @@ class OutlookDraftManager:
         except Exception as e:
             messagebox.showerror("错误", f"操作失败: {e}")
     
-    def process_template_variables(self, text):
-        """处理模板变量 (增强版：不区分大小写)"""
+    def process_template_variables(self, text, row_data=None, headers=None):
+        """处理模板变量 (增强版：不区分大小写)
+           row_data: 指定覆盖的Excel行数据 (用于批量生成)
+           headers: 指定表头 (用于批量生成)
+        """
         if not text:
             return ""
             
@@ -2182,17 +2187,34 @@ class OutlookDraftManager:
             pattern = re.compile(re.escape(placeholder), re.IGNORECASE)
             text = pattern.sub(str(value), text)
         
-        # 如果有Excel数据，替换列名变量 (保持原逻辑，列名 usually Case Sensitive in logic but user might expect loose)
-        # 这里为了稳妥，暂保持列名精确匹配，除非用户反馈
-        if self.current_excel_data and len(self.current_excel_data) > 0:
-            headers = self.current_excel_data[0] if len(self.current_excel_data) > 0 else []
+        # 替换签名作为占位符
+        if hasattr(self, 'email_signatures'):
+            for name, value in self.email_signatures.items():
+                placeholder = "{" + name + "}"
+                pattern = re.compile(re.escape(placeholder), re.IGNORECASE)
+                text = pattern.sub(str(value), text)
+        
+        # 处理Excel数据
+        # 1. 优先使用传入的行数据 (Batch 模式)
+        if row_data is not None and headers is not None:
+             for i, header in enumerate(headers):
+                if i < len(row_data):
+                    placeholder = "{" + str(header) + "}"
+                    # 不区分大小写的列名匹配
+                    pattern = re.compile(re.escape(placeholder), re.IGNORECASE)
+                    text = pattern.sub(str(row_data[i]), text)
+                    
+        # 2. 否则使用当前加载的第一行数据 (Single Draft 模式)
+        elif self.current_excel_data and len(self.current_excel_data) > 0:
+            current_headers = self.current_excel_data[0] if len(self.current_excel_data) > 0 else []
             if len(self.current_excel_data) > 1:
                 first_data_row = self.current_excel_data[1]
-                for i, header in enumerate(headers):
+                for i, header in enumerate(current_headers):
                     if i < len(first_data_row):
                         placeholder = "{" + str(header) + "}"
-                        # 这里还是建议精确匹配，因为表头通常是固定的
-                        text = text.replace(placeholder, str(first_data_row[i]))
+                        # 统一为不区分大小写
+                        pattern = re.compile(re.escape(placeholder), re.IGNORECASE)
+                        text = pattern.sub(str(first_data_row[i]), text)
         
         return text
     
@@ -2300,40 +2322,22 @@ class OutlookDraftManager:
 
             # 从第二行开始（跳过表头）
             for row_data in self.current_excel_data[1:]:
-                # 创建变量字典
-                variables = {"{" + str(headers[i]) + "}": str(row_data[i]) 
-                            for i in range(min(len(headers), len(row_data)))}
-                
-                # 添加自定义占位符
-                variables.update(self.custom_placeholders)
+                # 处理收件人
+                to_filled_list = [self.process_template_variables(email, row_data, headers) for email in to_list]
+                cc_filled_list = [self.process_template_variables(email, row_data, headers) for email in cc_list]
+                bcc_filled_list = [self.process_template_variables(email, row_data, headers) for email in bcc_list]
                 
                 # 替换主题和正文中的变量
-                subject_filled = subject_template
-                body_filled = body_template
-                
-                # 处理收件人列表中的变量
-                to_filled_list = []
-                for email in to_list:
-                    email_filled = email
-                    for placeholder, value in variables.items():
-                        email_filled = email_filled.replace(placeholder, value)
-                    to_filled_list.append(email_filled)
-                
-                for placeholder, value in variables.items():
-                    subject_filled = subject_filled.replace(placeholder, value)
-                    body_filled = body_filled.replace(placeholder, value)
-                
-                # 处理其他模板变量
-                subject_filled = self.process_template_variables(subject_filled)
-                body_filled = self.process_template_variables(body_filled)
+                subject_filled = self.process_template_variables(subject_template, row_data, headers)
+                body_filled = self.process_template_variables(body_template, row_data, headers)
                 
                 # 创建邮件
                 mail = outlook.CreateItem(0)
                 mail.To = "; ".join(to_filled_list) if to_filled_list else to_str
-                if cc_list:
-                    mail.CC = "; ".join(cc_list)
-                if bcc_list:
-                    mail.BCC = "; ".join(bcc_list)
+                if cc_filled_list:
+                    mail.CC = "; ".join(cc_filled_list)
+                if bcc_filled_list:
+                    mail.BCC = "; ".join(bcc_filled_list)
                 mail.Subject = subject_filled
                 
                 # 处理HTML正文
@@ -3419,6 +3423,14 @@ class OutlookDraftManager:
                     display_val = display_val[:12] + "..."
                 menu.add_command(label=f"  📌 {{{name}}} ({display_val})", 
                                command=lambda n=name: self.insert_placeholder(entry_widget, f"{{{n}}}"))
+        
+        # 签名占位符 (新增)
+        if hasattr(self, 'email_signatures') and self.email_signatures:
+            menu.add_separator()
+            menu.add_command(label="签名占位符:", state="disabled")
+            for name in self.email_signatures.keys():
+                menu.add_command(label=f"  ✍️ {{{name}}}", 
+                               command=lambda n=name: self.insert_placeholder(entry_widget, f"{{{n}}}"))
 
         menu.add_separator()
         
@@ -3951,11 +3963,44 @@ class OutlookDraftManager:
             messagebox.showerror("错误", f"保存模板失败: {str(e)}")
             return False
 
+    def add_format_toolbar(self, parent, text_widget):
+        """添加格式化工具栏 (加粗、斜体等)"""
+        f_toolbar = ttk.Frame(parent)
+        f_toolbar.pack(fill=tk.X, pady=2)
+        
+        def insert_tag(open_tag, close_tag):
+            try:
+                # 获取选区
+                sel_start = text_widget.index("sel.first")
+                sel_end = text_widget.index("sel.last")
+                selection = text_widget.get(sel_start, sel_end)
+                
+                # 插入标签
+                text_widget.delete(sel_start, sel_end)
+                text_widget.insert(sel_start, f"{open_tag}{selection}{close_tag}")
+            except tk.TclError:
+                # 没有选区，直接在光标处插入
+                text_widget.insert(tk.INSERT, f"{open_tag}{close_tag}")
+                # 将光标移动到标签中间
+                text_widget.mark_set(tk.INSERT, f"{tk.INSERT}-{len(close_tag)}c")
+        
+        ttk.Button(f_toolbar, text="B", width=3, command=lambda: insert_tag("<b>", "</b>")).pack(side=tk.LEFT, padx=1)
+        ttk.Button(f_toolbar, text="I", width=3, command=lambda: insert_tag("<i>", "</i>")).pack(side=tk.LEFT, padx=1)
+        ttk.Button(f_toolbar, text="U", width=3, command=lambda: insert_tag("<u>", "</u>")).pack(side=tk.LEFT, padx=1)
+        ttk.Label(f_toolbar, text="|").pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(f_toolbar, text="H1", width=3, command=lambda: insert_tag("<h1>", "</h1>")).pack(side=tk.LEFT, padx=1)
+        ttk.Button(f_toolbar, text="H2", width=3, command=lambda: insert_tag("<h2>", "</h2>")).pack(side=tk.LEFT, padx=1)
+        ttk.Label(f_toolbar, text="|").pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(f_toolbar, text="红字", width=5, command=lambda: insert_tag('<span style="color:red">', '</span>')).pack(side=tk.LEFT, padx=1)
+        ttk.Button(f_toolbar, text="换行", width=5, command=lambda: text_widget.insert(tk.INSERT, "<br>")).pack(side=tk.LEFT, padx=1)
+
     def manage_content_templates(self):
         """管理内容模板"""
         dialog = tk.Toplevel(self.root)
         dialog.title("草稿内容模板管理")
-        dialog.geometry("800x600")
+        dialog.geometry("900x700")
         dialog.transient(self.root)
         dialog.grab_set()
         
@@ -3990,8 +4035,33 @@ class OutlookDraftManager:
         ttk.Entry(right_frame, textvariable=subject_var).pack(fill=tk.X, pady=(0, 5))
         
         ttk.Label(right_frame, text="正文:").pack(anchor=tk.W)
+        
+        # 增加正文工具栏容器
+        toolbars_container = ttk.Frame(right_frame)
+        toolbars_container.pack(fill=tk.X, pady=(0, 2))
+        
+        # 1. 占位符栏
+        ph_toolbar = ttk.Frame(toolbars_container)
+        ph_toolbar.pack(fill=tk.X)
+        
+        # 2. 格式化栏
+        fmt_toolbar = ttk.Frame(toolbars_container)
+        fmt_toolbar.pack(fill=tk.X)
+
         body_text = scrolledtext.ScrolledText(right_frame, width=40, height=15, wrap=tk.WORD)
         body_text.pack(fill=tk.BOTH, expand=True, pady=(0, 5))
+
+        # 填充工具栏
+        def insert_ph_menu():
+             self.show_placeholder_menu(body_text)
+
+        ttk.Button(ph_toolbar, text="插入占位符", command=insert_ph_menu).pack(side=tk.LEFT, padx=0)
+        ttk.Label(ph_toolbar, text="(支持 {签名名}, {自定义占位符} 等)", font=('TkDefaultFont', 8), foreground='gray').pack(side=tk.LEFT, padx=5)
+
+        # 添加格式化工具栏
+        self.add_format_toolbar(fmt_toolbar, body_text)
+
+
         
         # 按钮区域
         btn_frame = ttk.Frame(dialog)
@@ -4078,6 +4148,14 @@ class OutlookDraftManager:
         ttk.Button(left_btn_frame, text="应用选中模板", command=apply_template).pack(fill=tk.X)
         
         # 底部按钮
+        def clear_fields():
+            name_var.set("")
+            subject_var.set("")
+            body_text.delete(1.0, tk.END)
+            # 清除选中
+            template_listbox.selection_clear(0, tk.END)
+
+        ttk.Button(btn_frame, text="✨ 清空/新建", command=clear_fields).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text="从当前内容新建", command=save_current_as_new).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text="保存/更新模板", command=save_template).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text="删除模板", command=delete_template).pack(side=tk.LEFT, padx=5)
@@ -4451,12 +4529,59 @@ class OutlookDraftManager:
         body_text.pack(fill=tk.BOTH, expand=True)
         
         # 处理占位符
-        processed_body = body
-        processed_body = processed_body.replace("{DATE}", datetime.now().strftime("%Y-%m-%d"))
-        processed_body = processed_body.replace("{TIME}", datetime.now().strftime("%H:%M:%S"))
+        # 使用统一的变量处理逻辑
+        processed_body = self.process_template_variables(body)
         
-        # 插入正文
-        body_text.insert(1.0, processed_body)
+        # 特殊处理 {SMART_IMAGE} 预览
+        smart_img_path = None
+        if "{SMART_IMAGE}" in body:
+             try:
+                 # 获取当前Excel配置 (解析路径变量)
+                 excel_path = self.excel_path_var.get()
+                 if excel_path:
+                     excel_path = self.process_template_variables(excel_path).split(';')[0]
+                     if self.smart_match_var.get():
+                          excel_path = self.get_latest_file_in_folder(excel_path)
+                 
+                 sheet_name = self.sheet_combo.get()
+                 data_range = self.range_var.get()
+                 
+                 if excel_path and os.path.exists(excel_path):
+                     # 调用逻辑生成图片
+                     _, img_info = self.process_smart_image_logic(processed_body, excel_path, sheet_name, data_range)
+                     if img_info and os.path.exists(img_info['path']):
+                         smart_img_path = img_info['path']
+             except Exception as e:
+                 print(f"Preview Smart Image Error: {e}")
+
+        # 渲染正文 (支持图片插入)
+        self.preview_images = [] # 防止GC回收
+        
+        if "{SMART_IMAGE}" in processed_body:
+            parts = processed_body.split("{SMART_IMAGE}")
+            for i, part in enumerate(parts):
+                body_text.insert(tk.END, part)
+                if i < len(parts) - 1:
+                    if smart_img_path and ImageTk:
+                        try:
+                            pil_img = Image.open(smart_img_path)
+                            # 缩放以适应预览窗口
+                            width_ratio = 750 / pil_img.width
+                            if width_ratio < 1:
+                                new_size = (int(pil_img.width * width_ratio), int(pil_img.height * width_ratio))
+                                pil_img = pil_img.resize(new_size, Image.Resampling.LANCZOS)
+                            
+                            photo = ImageTk.PhotoImage(pil_img)
+                            self.preview_images.append(photo) # Keep reference
+                            body_text.image_create(tk.END, image=photo)
+                            body_text.insert(tk.END, "\n")
+                        except Exception as e:
+                            body_text.insert(tk.END, f"\n[图片渲染错误: {str(e)}]\n")
+                    else:
+                        body_text.insert(tk.END, "\n[Excel智能截图占位]\n")
+        else:
+            body_text.insert(1.0, processed_body)
+
         body_text.config(state='disabled')
         
         # 底部信息

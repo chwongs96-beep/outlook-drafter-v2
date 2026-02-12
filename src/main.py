@@ -74,8 +74,15 @@ class ScrollableFrame(ttk.Frame):
         self.canvas.unbind_all("<Button-5>")
 
     def _on_mousewheel(self, event):
-        # 检查是否还有其他滚动的Widget在焦点下 (例如 Text)
-        # 简单处理：总是滚动
+        # 检查事件来源是否是内部可滚动控件（如 Text/ScrolledText）
+        widget = event.widget
+        while widget:
+            if widget.__class__.__name__ in ('Text', 'ScrolledText'):
+                return  # 让内部 Text 控件处理自己的滚动
+            try:
+                widget = widget.master
+            except:
+                break
         if event.num == 4:
             self.canvas.yview_scroll(-1, "units")
         elif event.num == 5:
@@ -148,8 +155,11 @@ class OutlookDraftManager:
         self.root.title("Outlook 草稿邮件管理器 - 增强版")
         self.root.geometry("1200x800")
         
-        self.config_file = "draft_configs.json"
-        self.history_file = "draft_history.json"
+        # 以脚本所在目录为基准路径，确保从任意目录启动都能找到配置文件
+        self._base_dir = os.path.dirname(os.path.abspath(__file__))
+        
+        self.config_file = os.path.join(self._base_dir, "draft_configs.json")
+        self.history_file = os.path.join(self._base_dir, "draft_history.json")
         self.configs = self.load_configs()
         self.current_excel_data = None
         self.excel_column_widths = []  # Excel 实际列宽（像素）
@@ -506,6 +516,8 @@ class OutlookDraftManager:
         
         self.body_editor = scrolledtext.ScrolledText(body_frame, height=15)
         self.body_editor.pack(fill=tk.BOTH, expand=True)
+        # 添加格式化工具栏
+        self.add_format_toolbar(body_frame, self.body_editor)
         # 兼容旧代码
         self.body_text = self.body_editor
         
@@ -558,6 +570,15 @@ class OutlookDraftManager:
         left.pack(side=tk.LEFT)
         ttk.Button(left, text="生成预览", command=self.generate_preview).pack(side=tk.LEFT, padx=5)
         ttk.Button(left, text="增强预览", command=self.show_enhanced_preview).pack(side=tk.LEFT, padx=5)
+        
+        # 中间缩放控件
+        center = ttk.Frame(bar)
+        center.pack(side=tk.LEFT, expand=True)
+        ttk.Button(center, text="🔍−", width=3, command=self.zoom_out).pack(side=tk.LEFT, padx=1)
+        self.zoom_label = ttk.Label(center, text="100%", width=5, anchor=tk.CENTER)
+        self.zoom_label.pack(side=tk.LEFT, padx=2)
+        ttk.Button(center, text="🔍+", width=3, command=self.zoom_in).pack(side=tk.LEFT, padx=1)
+        ttk.Button(center, text="🌐", width=3, command=self.toggle_language).pack(side=tk.LEFT, padx=10)
         
         right = ttk.Frame(bar)
         right.pack(side=tk.RIGHT)
@@ -659,7 +680,7 @@ class OutlookDraftManager:
     
     def load_ui_preferences(self):
         """加载界面偏好设置"""
-        pref_file = "ui_preferences.json"
+        pref_file = os.path.join(self._base_dir, "ui_preferences.json")
         if os.path.exists(pref_file):
             try:
                 with open(pref_file, 'r', encoding='utf-8') as f:
@@ -676,12 +697,12 @@ class OutlookDraftManager:
                     # 应用缩放
                     if self.ui_scale != 1.0:
                         self.root.after(100, self.apply_zoom)  # 延迟应用，确保界面已加载
-            except:
-                pass
+            except Exception as e:
+                print(f"加载UI偏好设置失败: {e}")
     
     def save_ui_preferences(self):
         """保存界面偏好设置"""
-        pref_file = "ui_preferences.json"
+        pref_file = os.path.join(self._base_dir, "ui_preferences.json")
         try:
             prefs = {
                 'ui_scale': self.ui_scale,
@@ -691,8 +712,8 @@ class OutlookDraftManager:
             }
             with open(pref_file, 'w', encoding='utf-8') as f:
                 json.dump(prefs, f, ensure_ascii=False, indent=2)
-        except:
-            pass
+        except Exception as e:
+            print(f"保存UI偏好设置失败: {e}")
     
     def update_config_list(self):
         """更新配置下拉列表"""
@@ -1553,12 +1574,20 @@ class OutlookDraftManager:
 
     def generate_preview(self):
         """在弹出窗口中生成邮件预览"""
-        # 获取邮箱地址
-        to_list = [x.strip() for x in self.to_entry_var.get().split(';') if x.strip()]
-        cc_list = [x.strip() for x in self.cc_entry_var.get().split(';') if x.strip()]
-        bcc_list = [x.strip() for x in self.bcc_entry_var.get().split(';') if x.strip()]
+        # 获取邮箱地址并处理变量
+        to_raw = self.to_entry_var.get()
+        cc_raw = self.cc_entry_var.get()
+        bcc_raw = self.bcc_entry_var.get()
         
-        subject = self.subject_var.get().strip()
+        to_processed = self.process_template_variables(to_raw)
+        cc_processed = self.process_template_variables(cc_raw)
+        bcc_processed = self.process_template_variables(bcc_raw)
+        
+        to_list = [x.strip() for x in to_processed.split(';') if x.strip()]
+        cc_list = [x.strip() for x in cc_processed.split(';') if x.strip()]
+        bcc_list = [x.strip() for x in bcc_processed.split(';') if x.strip()]
+        
+        subject = self.process_template_variables(self.subject_var.get().strip())
         body_template = self.body_text.get(1.0, tk.END).strip()
         
         if not to_list:
@@ -1604,9 +1633,10 @@ class OutlookDraftManager:
         
         # 显示纯文本版本的预览
         if "{EXCEL_DATA}" in body_template and self.current_excel_data:
-            preview += body_template.replace("{EXCEL_DATA}", "\n" + self.format_excel_data_as_text() + "\n")
+            preview_body = self.process_template_variables(body_template)
+            preview += preview_body.replace("{EXCEL_DATA}", "\n" + self.format_excel_data_as_text() + "\n")
         else:
-            preview += body
+            preview += self.process_template_variables(body)
         
         preview += f"\n{'-'*60}\n"
         if self.attachments:
@@ -2386,7 +2416,25 @@ class OutlookDraftManager:
                      print(f"批量生成图片失败: {e}")
 
             # 从第二行开始（跳过表头）
-            for row_data in self.current_excel_data[1:]:
+            data_rows = self.current_excel_data[1:]
+            total = len(data_rows)
+            
+            # 创建进度窗口
+            progress_win = tk.Toplevel(self.root)
+            progress_win.title("批量创建进度")
+            progress_win.geometry("400x120")
+            progress_win.transient(self.root)
+            progress_win.grab_set()
+            progress_win.resizable(False, False)
+            
+            progress_label = ttk.Label(progress_win, text="正在创建草稿...", padding=10)
+            progress_label.pack()
+            progress_bar = ttk.Progressbar(progress_win, length=350, mode='determinate', maximum=total)
+            progress_bar.pack(padx=20, pady=5)
+            progress_detail = ttk.Label(progress_win, text=f"0 / {total}")
+            progress_detail.pack()
+            
+            for idx, row_data in enumerate(data_rows):
                 # 处理收件人
                 to_filled_list = [self.process_template_variables(email, row_data, headers) for email in to_list]
                 cc_filled_list = [self.process_template_variables(email, row_data, headers) for email in cc_list]
@@ -2452,6 +2500,14 @@ class OutlookDraftManager:
                 
                 mail.Save()
                 created_count += 1
+                
+                # 更新进度
+                progress_bar['value'] = idx + 1
+                progress_detail.config(text=f"{idx + 1} / {total}")
+                progress_win.update()
+            
+            # 关闭进度窗口
+            progress_win.destroy()
             
             # 清理智能截图临时文件
             if smart_img_info and os.path.exists(smart_img_info['path']):
@@ -2591,16 +2647,26 @@ class OutlookDraftManager:
             # 静默保存（不显示提示）
             config_name = self.config_name_var.get().strip()
             if config_name in self.configs:
+                to_list = [x.strip() for x in self.to_entry_var.get().split(';') if x.strip()]
+                cc_list = [x.strip() for x in self.cc_entry_var.get().split(';') if x.strip()]
+                bcc_list = [x.strip() for x in self.bcc_entry_var.get().split(';') if x.strip()]
                 config_data = {
                     "excel_path": self.excel_path_var.get(),
                     "sheet_name": self.sheet_combo.get(),
                     "data_range": self.range_var.get(),
-                    "to": self.to_var.get(),
-                    "cc": self.cc_var.get(),
-                    "bcc": self.bcc_var.get(),
+                    "to": to_list,
+                    "cc": cc_list,
+                    "bcc": bcc_list,
                     "subject": self.subject_var.get(),
                     "body": self.body_text.get(1.0, tk.END).strip(),
-                    "attachments": self.attachments.copy()
+                    "attachments": self.attachments.copy(),
+                    "inline_images": self.inline_images.copy() if hasattr(self, 'inline_images') else [],
+                    "custom_placeholders": self.custom_placeholders.copy(),
+                    "high_priority": self.priority_var.get(),
+                    "read_receipt": self.receipt_var.get(),
+                    "smart_match": self.smart_match_var.get(),
+                    "filename_keyword": self.filename_keyword_var.get(),
+                    "attach_excel": self.attach_excel_var.get()
                 }
                 self.configs[config_name] = config_data
                 self.save_configs()
@@ -2661,8 +2727,11 @@ class OutlookDraftManager:
             
             # 显示配置详情
             config = self.configs[config_name]
-            to = config.get('to', '')[:30] + '...' if len(config.get('to', '')) > 30 else config.get('to', '')
-            subject = config.get('subject', '')[:40] + '...' if len(config.get('subject', '')) > 40 else config.get('subject', '')
+            to_raw = config.get('to', '')
+            to_str = '; '.join(to_raw) if isinstance(to_raw, list) else str(to_raw)
+            to = to_str[:30] + '...' if len(to_str) > 30 else to_str
+            subject_str = config.get('subject', '')
+            subject = subject_str[:40] + '...' if len(subject_str) > 40 else subject_str
             
             detail = f"收件人: {to} | 主题: {subject}"
             ttk.Label(frame, text=detail, font=('TkDefaultFont', 8), foreground='gray').pack(side=tk.LEFT, padx=(10, 0))
@@ -3317,66 +3386,6 @@ class OutlookDraftManager:
                     messagebox.showinfo("成功", f"配置 '{config_name}' 已删除")
 
     
-    def add_recipient(self, recipient_type):
-        """添加收件人/抄送/密送邮箱"""
-        import re
-        
-        if recipient_type == 'to':
-            email = self.to_entry_var.get().strip()
-            listbox = self.to_listbox
-        elif recipient_type == 'cc':
-            email = self.cc_entry_var.get().strip()
-            listbox = self.cc_listbox
-        else:  # bcc
-            email = self.bcc_entry_var.get().strip()
-            listbox = self.bcc_listbox
-        
-        if not email:
-            messagebox.showwarning("警告", "请输入邮箱地址")
-            return
-        
-        # 简单的邮箱格式验证
-        email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-        if not re.match(email_pattern, email):
-            if not messagebox.askyesno("格式警告", 
-                f"'{email}' 格式可能不正确，是否仍要添加？"):
-                return
-        
-        # 检查是否已存在
-        current_emails = list(listbox.get(0, tk.END))
-        if email in current_emails:
-            messagebox.showwarning("警告", "此邮箱已在列表中")
-            return
-        
-        # 添加到列表
-        listbox.insert(tk.END, email)
-        
-        # 清空输入框
-        if recipient_type == 'to':
-            self.to_entry_var.set("")
-        elif recipient_type == 'cc':
-            self.cc_entry_var.set("")
-        else:
-            self.bcc_entry_var.set("")
-    
-    def remove_recipient(self, recipient_type):
-        """删除选中的收件人/抄送/密送邮箱"""
-        if recipient_type == 'to':
-            listbox = self.to_listbox
-        elif recipient_type == 'cc':
-            listbox = self.cc_listbox
-        else:  # bcc
-            listbox = self.bcc_listbox
-        
-        selection = listbox.curselection()
-        if not selection:
-            messagebox.showwarning("警告", "请先选择要删除的邮箱")
-            return
-        
-        # 从后往前删除（避免索引变化问题）
-        for index in reversed(selection):
-            listbox.delete(index)
-    
     def add_manual_email_dialog(self, entry_widget):
         """弹出高级对话框编辑/添加邮箱（支持多行粘贴）"""
         # 创建弹窗
@@ -3555,14 +3564,6 @@ class OutlookDraftManager:
             self.body_text.delete(1.0, tk.END)
             self.body_text.insert(1.0, content)
             
-            # 更新预览标签
-            preview = content[:50] + "..." if len(content) > 50 else content
-            preview = preview.replace("\n", " ")
-            if preview:
-                self.body_preview_label.config(text=f"已编辑: {preview}", foreground='blue')
-            else:
-                self.body_preview_label.config(text="(点击编辑正文内容)", foreground='gray')
-            
             body_window.destroy()
         
         ttk.Button(button_frame, text="✓ 保存并关闭", command=save_and_close, width=15).pack(side=tk.RIGHT, padx=5)
@@ -3655,7 +3656,7 @@ class OutlookDraftManager:
         
         # 检查拼写
         errors = []
-        for wrong, correct in self.common_spelling_errors.items():
+        for wrong, correct in self.spell_check_dict.items():
             if wrong in content:
                 errors.append((wrong, correct))
         
@@ -3958,7 +3959,125 @@ class OutlookDraftManager:
         ttk.Button(btn_frame, text="💾 保存/更新", command=save_item).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text="❌ 删除选中", command=delete_item).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text="📝 批量编辑(JSON)", command=batch_edit).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="🔄 同步到所有配置", command=lambda: self.sync_placeholders_to_all_configs(dialog)).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text="关闭", command=dialog.destroy).pack(side=tk.LEFT, padx=5)
+
+    def sync_placeholders_to_all_configs(self, parent_dialog=None):
+        """将当前占位符同步/更新到所有已保存的配置"""
+        if not self.configs:
+            messagebox.showinfo("提示", "没有已保存的配置", parent=parent_dialog)
+            return
+        
+        config_names = list(self.configs.keys())
+        current_ph = self.custom_placeholders.copy()
+        
+        # 弹出确认对话框，让用户选择同步模式
+        sync_dialog = tk.Toplevel(parent_dialog or self.root)
+        sync_dialog.title("同步占位符到所有配置")
+        sync_dialog.geometry("500x400")
+        sync_dialog.transient(parent_dialog or self.root)
+        sync_dialog.grab_set()
+        
+        ttk.Label(sync_dialog, text="将当前占位符同步到已保存的配置", 
+                 font=('TkDefaultFont', 10, 'bold')).pack(pady=(10, 5))
+        
+        # 同步模式
+        mode_frame = ttk.LabelFrame(sync_dialog, text="同步模式", padding="10")
+        mode_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        sync_mode = tk.StringVar(value="merge")
+        ttk.Radiobutton(mode_frame, text="合并 - 新增/更新占位符，保留配置中已有的其他占位符", 
+                        variable=sync_mode, value="merge").pack(anchor=tk.W, pady=2)
+        ttk.Radiobutton(mode_frame, text="覆盖 - 用当前占位符完全替换所有配置的占位符", 
+                        variable=sync_mode, value="replace").pack(anchor=tk.W, pady=2)
+        
+        # 显示当前占位符
+        ph_frame = ttk.LabelFrame(sync_dialog, text=f"当前占位符 ({len(current_ph)} 个)", padding="5")
+        ph_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        ph_text = ""
+        for name, value in current_ph.items():
+            display_val = str(value)
+            if len(display_val) > 30:
+                display_val = display_val[:27] + "..."
+            ph_text += f"  {{{name}}} = {display_val}\n"
+        if not ph_text:
+            ph_text = "  (无占位符)"
+        
+        ph_label = tk.Text(ph_frame, height=min(6, max(2, len(current_ph))), wrap=tk.WORD, font=('TkDefaultFont', 9))
+        ph_label.insert(1.0, ph_text.strip())
+        ph_label.config(state='disabled')
+        ph_label.pack(fill=tk.X)
+        
+        # 选择要同步的配置
+        config_frame = ttk.LabelFrame(sync_dialog, text="选择要同步的配置", padding="5")
+        config_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        
+        # 全选/取消
+        select_all_var = tk.BooleanVar(value=True)
+        config_vars = {}
+        
+        def toggle_all():
+            val = select_all_var.get()
+            for v in config_vars.values():
+                v.set(val)
+        
+        ttk.Checkbutton(config_frame, text="全选/取消全选", variable=select_all_var, 
+                       command=toggle_all).pack(anchor=tk.W)
+        
+        config_list_frame = ttk.Frame(config_frame)
+        config_list_frame.pack(fill=tk.BOTH, expand=True)
+        
+        config_canvas = tk.Canvas(config_list_frame, height=100)
+        config_scrollbar = ttk.Scrollbar(config_list_frame, orient="vertical", command=config_canvas.yview)
+        config_inner = ttk.Frame(config_canvas)
+        
+        config_inner.bind("<Configure>", lambda e: config_canvas.configure(scrollregion=config_canvas.bbox("all")))
+        config_canvas.create_window((0, 0), window=config_inner, anchor="nw")
+        config_canvas.configure(yscrollcommand=config_scrollbar.set)
+        
+        config_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        config_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        for name in config_names:
+            var = tk.BooleanVar(value=True)
+            config_vars[name] = var
+            existing_ph_count = len(self.configs[name].get("custom_placeholders", {}))
+            ttk.Checkbutton(config_inner, text=f"{name} (现有 {existing_ph_count} 个占位符)", 
+                          variable=var).pack(anchor=tk.W, padx=10)
+        
+        # 执行同步
+        def do_sync():
+            selected_configs = [name for name, var in config_vars.items() if var.get()]
+            if not selected_configs:
+                messagebox.showwarning("警告", "请至少选择一个配置", parent=sync_dialog)
+                return
+            
+            mode = sync_mode.get()
+            updated_count = 0
+            
+            for config_name in selected_configs:
+                if config_name in self.configs:
+                    if mode == "replace":
+                        self.configs[config_name]["custom_placeholders"] = current_ph.copy()
+                    else:  # merge
+                        existing = self.configs[config_name].get("custom_placeholders", {})
+                        existing.update(current_ph)
+                        self.configs[config_name]["custom_placeholders"] = existing
+                    updated_count += 1
+            
+            if self.save_configs():
+                sync_dialog.destroy()
+                messagebox.showinfo("成功", 
+                    f"已将 {len(current_ph)} 个占位符{'覆盖' if mode == 'replace' else '合并'}同步到 {updated_count} 个配置。",
+                    parent=parent_dialog or self.root)
+                self.status_var.set(f"占位符已同步到 {updated_count} 个配置")
+        
+        # 按钮
+        btn_frame = ttk.Frame(sync_dialog)
+        btn_frame.pack(fill=tk.X, padx=10, pady=10)
+        ttk.Button(btn_frame, text="✅ 执行同步", command=do_sync).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="取消", command=sync_dialog.destroy).pack(side=tk.RIGHT, padx=5)
 
     def update_placeholder_tree(self):
         """更新占位符Treeview"""
@@ -3971,13 +4090,13 @@ class OutlookDraftManager:
     
     def load_signatures(self):
         """加载邮件签名"""
-        signature_file = "email_signatures.json"
+        signature_file = os.path.join(self._base_dir, "email_signatures.json")
         if os.path.exists(signature_file):
             try:
                 with open(signature_file, 'r', encoding='utf-8') as f:
                     return json.load(f)
-            except:
-                pass
+            except Exception as e:
+                print(f"加载签名文件失败: {e}")
         # 默认签名
         return {
             "默认签名": "\n\n--\n此致\n敬礼！",
@@ -3987,7 +4106,7 @@ class OutlookDraftManager:
     
     def save_signatures(self):
         """保存邮件签名"""
-        signature_file = "email_signatures.json"
+        signature_file = os.path.join(self._base_dir, "email_signatures.json")
         try:
             with open(signature_file, 'w', encoding='utf-8') as f:
                 json.dump(self.email_signatures, f, ensure_ascii=False, indent=2)
@@ -3998,13 +4117,13 @@ class OutlookDraftManager:
 
     def load_content_templates(self):
         """加载内容模板"""
-        template_file = "content_templates.json"
+        template_file = os.path.join(self._base_dir, "content_templates.json")
         if os.path.exists(template_file):
             try:
                 with open(template_file, 'r', encoding='utf-8') as f:
                     return json.load(f)
-            except:
-                pass
+            except Exception as e:
+                print(f"加载内容模板失败: {e}")
         # 默认模板
         return {
             "默认模板": {
@@ -4019,7 +4138,7 @@ class OutlookDraftManager:
 
     def save_content_templates(self):
         """保存内容模板"""
-        template_file = "content_templates.json"
+        template_file = os.path.join(self._base_dir, "content_templates.json")
         try:
             with open(template_file, 'w', encoding='utf-8') as f:
                 json.dump(self.content_templates, f, ensure_ascii=False, indent=2)
@@ -4523,9 +4642,9 @@ class OutlookDraftManager:
     def show_enhanced_preview(self):
         """显示增强预览（类似Outlook样式）"""
         # 获取邮件信息
-        to_list = list(self.to_listbox.get(0, tk.END))
-        cc_list = list(self.cc_listbox.get(0, tk.END))
-        bcc_list = list(self.bcc_listbox.get(0, tk.END))
+        to_list = [x.strip() for x in self.to_entry_var.get().split(';') if x.strip()]
+        cc_list = [x.strip() for x in self.cc_entry_var.get().split(';') if x.strip()]
+        bcc_list = [x.strip() for x in self.bcc_entry_var.get().split(';') if x.strip()]
         subject = self.subject_var.get()
         body = self.body_text.get(1.0, tk.END).strip()
         

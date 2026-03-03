@@ -155,8 +155,13 @@ class OutlookDraftManager:
         self.root.title("Outlook 草稿邮件管理器 - 增强版")
         self.root.geometry("1200x800")
         
-        # 以脚本所在目录为基准路径，确保从任意目录启动都能找到配置文件
-        self._base_dir = os.path.dirname(os.path.abspath(__file__))
+        # 数据目录优先使用项目根目录（main.py 位于 src/ 时取上级目录）
+        self._script_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(self._script_dir)
+        if os.path.exists(os.path.join(project_root, "README.md")):
+            self._base_dir = project_root
+        else:
+            self._base_dir = self._script_dir
         
         self.config_file = os.path.join(self._base_dir, "draft_configs.json")
         self.history_file = os.path.join(self._base_dir, "draft_history.json")
@@ -659,14 +664,47 @@ class OutlookDraftManager:
         
     def load_configs(self):
         """加载保存的配置"""
-        if os.path.exists(self.config_file):
+        # 兼容历史路径：
+        # 1) 项目根目录（当前）
+        # 2) src 目录（旧版本）
+        # 3) 当前工作目录（更早版本）
+        candidate_paths = []
+        for path in [
+            self.config_file,
+            os.path.join(self._script_dir, "draft_configs.json"),
+            os.path.join(os.getcwd(), "draft_configs.json")
+        ]:
+            if path not in candidate_paths:
+                candidate_paths.append(path)
+
+        merged_configs = {}
+        loaded_from_legacy = False
+
+        for path in candidate_paths:
+            if not os.path.exists(path):
+                continue
             try:
-                with open(self.config_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+                with open(path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    merged_configs.update(data)
+                    if path != self.config_file:
+                        loaded_from_legacy = True
             except Exception as e:
-                messagebox.showerror("错误", f"加载配置失败: {str(e)}")
-                return {}
-        return {}
+                if path == self.config_file:
+                    messagebox.showerror("错误", f"加载配置失败: {str(e)}")
+                else:
+                    print(f"跳过损坏的历史配置文件: {path} ({e})")
+
+        # 若从旧路径加载到配置，自动合并回当前主配置文件，避免后续“保存后丢失”
+        if merged_configs and loaded_from_legacy:
+            try:
+                with open(self.config_file, 'w', encoding='utf-8') as f:
+                    json.dump(merged_configs, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                print(f"迁移配置到主文件失败: {e}")
+
+        return merged_configs
     
     def save_configs(self):
         """保存所有配置到文件"""
@@ -723,7 +761,7 @@ class OutlookDraftManager:
             self.config_combo.current(0)
         
         # 同时更新配置浏览器
-        if hasattr(self, 'config_listbox'):
+        if hasattr(self, 'config_tree'):
             self.update_config_browser()
     
     def new_config(self):
@@ -1988,7 +2026,7 @@ class OutlookDraftManager:
                 # 从剪贴板获取图片
                 img = ImageGrab.grabclipboard()
                 
-                if img:
+                if img and hasattr(img, 'save'):
                     # 保存到临时文件
                     temp_dir = tempfile.gettempdir()
                     img_filename = f"excel_paste_{uuid.uuid4().hex}.png"
@@ -2361,6 +2399,7 @@ class OutlookDraftManager:
                                     f"将为 {data_count} 行数据创建 {data_count} 封草稿邮件。\n确定继续？"):
             return
         
+        progress_win = None
         try:
             outlook = win32com.client.Dispatch("Outlook.Application")
             headers = self.current_excel_data[0]
@@ -2508,6 +2547,7 @@ class OutlookDraftManager:
             
             # 关闭进度窗口
             progress_win.destroy()
+            progress_win = None
             
             # 清理智能截图临时文件
             if smart_img_info and os.path.exists(smart_img_info['path']):
@@ -2520,6 +2560,8 @@ class OutlookDraftManager:
             self.status_var.set(f"批量创建完成 - {created_count} 封草稿")
             
         except Exception as e:
+            if progress_win and progress_win.winfo_exists():
+                progress_win.destroy()
             messagebox.showerror("错误", f"批量创建失败: {str(e)}")
     
     def preview_excel_data(self):

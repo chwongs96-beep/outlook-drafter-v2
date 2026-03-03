@@ -472,6 +472,25 @@ class OutlookDraftManager:
     def setup_compose_tab(self):
         """设置邮件编辑选项卡"""
         frame = self.tab_compose
+
+        # 配置快速选择（邮件编辑页）
+        config_pick_frame = ttk.LabelFrame(frame, text="配置快速选择", padding="8")
+        config_pick_frame.pack(fill=tk.X, padx=5, pady=5)
+        ttk.Label(config_pick_frame, text="选择配置:").pack(side=tk.LEFT)
+        self.compose_config_combo = ttk.Combobox(config_pick_frame, width=30, state="readonly")
+        self.compose_config_combo.pack(side=tk.LEFT, padx=5)
+        self.compose_config_combo.bind("<<ComboboxSelected>>", self.load_selected_config_from_compose)
+        ttk.Button(config_pick_frame, text="加载到当前编辑", command=self.load_selected_config_from_compose).pack(side=tk.LEFT, padx=5)
+
+        # 初始化配置列表（setup_config_tab 早于 setup_compose_tab 执行，这里需要补一次）
+        compose_config_names = list(self.configs.keys())
+        self.compose_config_combo['values'] = compose_config_names
+        if compose_config_names:
+            selected_name = self.config_combo.get() if hasattr(self, 'config_combo') else ""
+            if selected_name and selected_name in compose_config_names:
+                self.compose_config_combo.set(selected_name)
+            else:
+                self.compose_config_combo.current(0)
         
         # 收件人区域
         recipients_frame = ttk.LabelFrame(frame, text="收件人信息", padding="10")
@@ -757,8 +776,22 @@ class OutlookDraftManager:
         """更新配置下拉列表"""
         config_names = list(self.configs.keys())
         self.config_combo['values'] = config_names
+        if hasattr(self, 'compose_config_combo'):
+            self.compose_config_combo['values'] = config_names
+
+        # 尽量保持当前选中项
+        current_name = self.config_name_var.get().strip() if hasattr(self, 'config_name_var') else ""
+        if current_name and current_name in config_names:
+            index = config_names.index(current_name)
+            self.config_combo.current(index)
+            if hasattr(self, 'compose_config_combo'):
+                self.compose_config_combo.current(index)
         if config_names:
-            self.config_combo.current(0)
+            # 如果当前没有选中项，则默认选第一个
+            if self.config_combo.current() == -1:
+                self.config_combo.current(0)
+            if hasattr(self, 'compose_config_combo') and self.compose_config_combo.current() == -1:
+                self.compose_config_combo.current(0)
         
         # 同时更新配置浏览器
         if hasattr(self, 'config_tree'):
@@ -820,6 +853,8 @@ class OutlookDraftManager:
             # 选中刚保存的配置
             index = list(self.configs.keys()).index(config_name)
             self.config_combo.current(index)
+            if hasattr(self, 'compose_config_combo'):
+                self.compose_config_combo.current(index)
             messagebox.showinfo("成功", f"配置 '{config_name}' 已保存")
             self.status_var.set(f"已保存配置: {config_name}")
     
@@ -828,6 +863,9 @@ class OutlookDraftManager:
         config_name = self.config_combo.get()
         if not config_name or config_name not in self.configs:
             return
+
+        if hasattr(self, 'compose_config_combo'):
+            self.compose_config_combo.set(config_name)
         
         config = self.configs[config_name]
         self.config_name_var.set(config_name)
@@ -891,6 +929,18 @@ class OutlookDraftManager:
             self.sheet_combo.set(config.get("sheet_name", ""))
         
         self.status_var.set(f"已加载配置: {config_name}")
+
+    def load_selected_config_from_compose(self, event=None):
+        """从邮件编辑页加载选中的配置"""
+        if not hasattr(self, 'compose_config_combo'):
+            return
+
+        config_name = self.compose_config_combo.get()
+        if not config_name or config_name not in self.configs:
+            return
+
+        self.config_combo.set(config_name)
+        self.load_selected_config()
     
     def delete_config(self):
         """删除选中的配置"""

@@ -481,6 +481,7 @@ class OutlookDraftManager:
         self.compose_config_combo.pack(side=tk.LEFT, padx=5)
         self.compose_config_combo.bind("<<ComboboxSelected>>", self.load_selected_config_from_compose)
         ttk.Button(config_pick_frame, text="加载到当前编辑", command=self.load_selected_config_from_compose).pack(side=tk.LEFT, padx=5)
+        ttk.Button(config_pick_frame, text="保存当前配置", command=self.save_current_config).pack(side=tk.LEFT, padx=5)
 
         # 初始化配置列表（setup_config_tab 早于 setup_compose_tab 执行，这里需要补一次）
         compose_config_names = list(self.configs.keys())

@@ -2,6 +2,7 @@
   "ui_scale": 1.0,
   "language": "zh",
   "excel_history": [
+    "C:/Users/CheChe/Downloads/Merged_Output_Result.xlsx",
     "C:/Users/CheChe/Downloads/2025/cdsad.xlsx",
     "C:\\Users\\CheChe\\Downloads\\2025\\cdsad.xlsx",
     "C:\\Users\\CheChe\\Downloads\\testing.xlsx",
@@ -9,5 +10,5 @@
     "C:\\Users\\CheChe\\Downloads\\Excel Voucher_BJ_月末调整凭证_CAO_2025-05-31.xlsx",
     "C:\\Users\\CheChe\\Downloads\\cdsad.xlsx"
   ],
-  "default_excel_folder": "C:/Users/CheChe/Downloads/2025"
+  "default_excel_folder": "C:/Users/CheChe/Downloads"
 }

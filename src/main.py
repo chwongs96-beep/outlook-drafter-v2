@@ -4,6 +4,7 @@ Outlook 草稿邮件管理器 - 增强版
 新增功能：附件、BCC、批量创建、模板变量、配置导入导出等
 """
 
+import sys
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext, simpledialog
 import json
@@ -155,13 +156,12 @@ class OutlookDraftManager:
         self.root.title("Outlook 草稿邮件管理器 - 增强版")
         self.root.geometry("1200x800")
         
-        # 数据目录优先使用项目根目录（main.py 位于 src/ 时取上级目录）
-        self._script_dir = os.path.dirname(os.path.abspath(__file__))
-        project_root = os.path.dirname(self._script_dir)
-        if os.path.exists(os.path.join(project_root, "README.md")):
-            self._base_dir = project_root
+        # 以程序所在目录为基准路径，确保从任意目录启动都能找到配置文件
+        # 打包为.exe时 __file__ 指向临时目录，需用 sys.executable 的目录
+        if getattr(sys, 'frozen', False):
+            self._base_dir = os.path.dirname(sys.executable)
         else:
-            self._base_dir = self._script_dir
+            self._base_dir = os.path.dirname(os.path.abspath(__file__))
         
         self.config_file = os.path.join(self._base_dir, "draft_configs.json")
         self.history_file = os.path.join(self._base_dir, "draft_history.json")
@@ -472,26 +472,26 @@ class OutlookDraftManager:
     def setup_compose_tab(self):
         """设置邮件编辑选项卡"""
         frame = self.tab_compose
-
-        # 配置快速选择（邮件编辑页）
-        config_pick_frame = ttk.LabelFrame(frame, text="配置快速选择", padding="8")
-        config_pick_frame.pack(fill=tk.X, padx=5, pady=5)
-        ttk.Label(config_pick_frame, text="选择配置:").pack(side=tk.LEFT)
-        self.compose_config_combo = ttk.Combobox(config_pick_frame, width=30, state="readonly")
+        
+        # --- 配置快速选择栏 ---
+        config_bar = ttk.LabelFrame(frame, text="快速配置", padding="5")
+        config_bar.pack(fill=tk.X, padx=5, pady=(5, 2))
+        
+        bar_row = ttk.Frame(config_bar)
+        bar_row.pack(fill=tk.X)
+        ttk.Label(bar_row, text="当前配置:").pack(side=tk.LEFT)
+        self.compose_config_combo = ttk.Combobox(bar_row, width=25, state="readonly")
         self.compose_config_combo.pack(side=tk.LEFT, padx=5)
-        self.compose_config_combo.bind("<<ComboboxSelected>>", self.load_selected_config_from_compose)
-        ttk.Button(config_pick_frame, text="加载到当前编辑", command=self.load_selected_config_from_compose).pack(side=tk.LEFT, padx=5)
-        ttk.Button(config_pick_frame, text="保存当前配置", command=self.save_current_config).pack(side=tk.LEFT, padx=5)
-
-        # 初始化配置列表（setup_config_tab 早于 setup_compose_tab 执行，这里需要补一次）
-        compose_config_names = list(self.configs.keys())
-        self.compose_config_combo['values'] = compose_config_names
-        if compose_config_names:
-            selected_name = self.config_combo.get() if hasattr(self, 'config_combo') else ""
-            if selected_name and selected_name in compose_config_names:
-                self.compose_config_combo.set(selected_name)
-            else:
-                self.compose_config_combo.current(0)
+        self.compose_config_combo.bind("<<ComboboxSelected>>", self._on_compose_config_selected)
+        self._update_compose_config_list()
+        
+        ttk.Button(bar_row, text="加载", command=self._load_compose_config).pack(side=tk.LEFT, padx=2)
+        ttk.Button(bar_row, text="💾 保存", command=self.save_current_config).pack(side=tk.LEFT, padx=2)
+        ttk.Button(bar_row, text="另存为...", command=self._save_as_new_config).pack(side=tk.LEFT, padx=2)
+        
+        # 显示当前配置名
+        self.compose_config_name_label = ttk.Label(bar_row, text="", foreground="gray", font=('TkDefaultFont', 8))
+        self.compose_config_name_label.pack(side=tk.LEFT, padx=10)
         
         # 收件人区域
         recipients_frame = ttk.LabelFrame(frame, text="收件人信息", padding="10")
@@ -684,47 +684,14 @@ class OutlookDraftManager:
         
     def load_configs(self):
         """加载保存的配置"""
-        # 兼容历史路径：
-        # 1) 项目根目录（当前）
-        # 2) src 目录（旧版本）
-        # 3) 当前工作目录（更早版本）
-        candidate_paths = []
-        for path in [
-            self.config_file,
-            os.path.join(self._script_dir, "draft_configs.json"),
-            os.path.join(os.getcwd(), "draft_configs.json")
-        ]:
-            if path not in candidate_paths:
-                candidate_paths.append(path)
-
-        merged_configs = {}
-        loaded_from_legacy = False
-
-        for path in candidate_paths:
-            if not os.path.exists(path):
-                continue
+        if os.path.exists(self.config_file):
             try:
-                with open(path, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                if isinstance(data, dict):
-                    merged_configs.update(data)
-                    if path != self.config_file:
-                        loaded_from_legacy = True
+                with open(self.config_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
             except Exception as e:
-                if path == self.config_file:
-                    messagebox.showerror("错误", f"加载配置失败: {str(e)}")
-                else:
-                    print(f"跳过损坏的历史配置文件: {path} ({e})")
-
-        # 若从旧路径加载到配置，自动合并回当前主配置文件，避免后续“保存后丢失”
-        if merged_configs and loaded_from_legacy:
-            try:
-                with open(self.config_file, 'w', encoding='utf-8') as f:
-                    json.dump(merged_configs, f, ensure_ascii=False, indent=2)
-            except Exception as e:
-                print(f"迁移配置到主文件失败: {e}")
-
-        return merged_configs
+                messagebox.showerror("错误", f"加载配置失败: {str(e)}")
+                return {}
+        return {}
     
     def save_configs(self):
         """保存所有配置到文件"""
@@ -777,26 +744,62 @@ class OutlookDraftManager:
         """更新配置下拉列表"""
         config_names = list(self.configs.keys())
         self.config_combo['values'] = config_names
-        if hasattr(self, 'compose_config_combo'):
-            self.compose_config_combo['values'] = config_names
-
-        # 尽量保持当前选中项
-        current_name = self.config_name_var.get().strip() if hasattr(self, 'config_name_var') else ""
-        if current_name and current_name in config_names:
-            index = config_names.index(current_name)
-            self.config_combo.current(index)
-            if hasattr(self, 'compose_config_combo'):
-                self.compose_config_combo.current(index)
         if config_names:
-            # 如果当前没有选中项，则默认选第一个
-            if self.config_combo.current() == -1:
-                self.config_combo.current(0)
-            if hasattr(self, 'compose_config_combo') and self.compose_config_combo.current() == -1:
-                self.compose_config_combo.current(0)
+            self.config_combo.current(0)
         
         # 同时更新配置浏览器
         if hasattr(self, 'config_tree'):
             self.update_config_browser()
+        
+        # 同时更新邮件编辑页的配置下拉
+        self._update_compose_config_list()
+    
+    def _update_compose_config_list(self):
+        """更新邮件编辑页的配置下拉列表"""
+        if not hasattr(self, 'compose_config_combo'):
+            return
+        config_names = list(self.configs.keys())
+        self.compose_config_combo['values'] = config_names
+        # 尝试保持当前选中
+        current = self.config_name_var.get().strip()
+        if current in config_names:
+            self.compose_config_combo.set(current)
+    
+    def _on_compose_config_selected(self, event=None):
+        """邮件编辑页配置下拉选择事件"""
+        selected = self.compose_config_combo.get()
+        if selected:
+            self.compose_config_name_label.config(text=f"已选择: {selected}")
+    
+    def _load_compose_config(self):
+        """从邮件编辑页加载选中的配置"""
+        selected = self.compose_config_combo.get()
+        if not selected:
+            messagebox.showwarning("警告", "请先选择一个配置")
+            return
+        # 同步到设置页的 combo 并加载
+        config_names = list(self.configs.keys())
+        if selected in config_names:
+            idx = config_names.index(selected)
+            self.config_combo.current(idx)
+            self.load_selected_config()
+            self.compose_config_name_label.config(text=f"已加载: {selected}")
+            self.status_var.set(f"已加载配置: {selected}")
+    
+    def _save_as_new_config(self):
+        """另存为新配置"""
+        name = simpledialog.askstring("另存为", "请输入新配置名称:", parent=self.root)
+        if not name or not name.strip():
+            return
+        name = name.strip()
+        if name in self.configs:
+            if not messagebox.askyesno("确认", f"配置 '{name}' 已存在，是否覆盖？"):
+                return
+        self.config_name_var.set(name)
+        self.save_current_config()
+        self._update_compose_config_list()
+        self.compose_config_combo.set(name)
+        self.compose_config_name_label.config(text=f"已保存: {name}")
     
     def new_config(self):
         """创建新配置"""
@@ -854,19 +857,19 @@ class OutlookDraftManager:
             # 选中刚保存的配置
             index = list(self.configs.keys()).index(config_name)
             self.config_combo.current(index)
-            if hasattr(self, 'compose_config_combo'):
-                self.compose_config_combo.current(index)
             messagebox.showinfo("成功", f"配置 '{config_name}' 已保存")
             self.status_var.set(f"已保存配置: {config_name}")
+            # 同步邮件编辑页的配置下拉
+            self._update_compose_config_list()
+            if hasattr(self, 'compose_config_combo'):
+                self.compose_config_combo.set(config_name)
+                self.compose_config_name_label.config(text=f"已保存: {config_name}")
     
     def load_selected_config(self, event=None):
         """加载选中的配置"""
         config_name = self.config_combo.get()
         if not config_name or config_name not in self.configs:
             return
-
-        if hasattr(self, 'compose_config_combo'):
-            self.compose_config_combo.set(config_name)
         
         config = self.configs[config_name]
         self.config_name_var.set(config_name)
@@ -930,18 +933,6 @@ class OutlookDraftManager:
             self.sheet_combo.set(config.get("sheet_name", ""))
         
         self.status_var.set(f"已加载配置: {config_name}")
-
-    def load_selected_config_from_compose(self, event=None):
-        """从邮件编辑页加载选中的配置"""
-        if not hasattr(self, 'compose_config_combo'):
-            return
-
-        config_name = self.compose_config_combo.get()
-        if not config_name or config_name not in self.configs:
-            return
-
-        self.config_combo.set(config_name)
-        self.load_selected_config()
     
     def delete_config(self):
         """删除选中的配置"""
@@ -1417,8 +1408,8 @@ class OutlookDraftManager:
                                 column_widths.append(pixel_width)
                             else:
                                 column_widths.append(80)
-            except:
-                pass
+            except Exception as e:
+                print(f"读取列宽失败: {e}")
 
             wb.close()
             return (current_file_rows, column_widths), None
@@ -1910,6 +1901,15 @@ class OutlookDraftManager:
             self.status_var.set(f"草稿已创建 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
             
         except Exception as e:
+            # 清理临时生成的智能截图
+            for img in temp_inline_images:
+                try:
+                    if os.path.exists(img['path']):
+                        os.remove(img['path'])
+                except Exception:
+                    pass
+            # 清理内嵌图片记录（防止传递到下一个草稿）
+            self.cleanup_inline_images()
             messagebox.showerror("错误", f"创建草稿失败: {str(e)}\n\n请确保已安装并登录Outlook。")
     
     def add_attachment(self):
@@ -2077,7 +2077,7 @@ class OutlookDraftManager:
                 # 从剪贴板获取图片
                 img = ImageGrab.grabclipboard()
                 
-                if img and hasattr(img, 'save'):
+                if img:
                     # 保存到临时文件
                     temp_dir = tempfile.gettempdir()
                     img_filename = f"excel_paste_{uuid.uuid4().hex}.png"
@@ -2450,7 +2450,6 @@ class OutlookDraftManager:
                                     f"将为 {data_count} 行数据创建 {data_count} 封草稿邮件。\n确定继续？"):
             return
         
-        progress_win = None
         try:
             outlook = win32com.client.Dispatch("Outlook.Application")
             headers = self.current_excel_data[0]
@@ -2598,7 +2597,6 @@ class OutlookDraftManager:
             
             # 关闭进度窗口
             progress_win.destroy()
-            progress_win = None
             
             # 清理智能截图临时文件
             if smart_img_info and os.path.exists(smart_img_info['path']):
@@ -2607,12 +2605,18 @@ class OutlookDraftManager:
                 except:
                     pass
 
+            # 清理批量生成的临时图片文件
+            for img_path in batch_images:
+                try:
+                    if os.path.exists(img_path):
+                        os.remove(img_path)
+                except Exception:
+                    pass
+
             messagebox.showinfo("成功", f"成功创建 {created_count} 封草稿邮件！")
             self.status_var.set(f"批量创建完成 - {created_count} 封草稿")
             
         except Exception as e:
-            if progress_win and progress_win.winfo_exists():
-                progress_win.destroy()
             messagebox.showerror("错误", f"批量创建失败: {str(e)}")
     
     def preview_excel_data(self):
@@ -3067,54 +3071,43 @@ class OutlookDraftManager:
                     # 无论Excel有多少行数据，只取第一行数据（如果有）来替换变量
                     # 并生成一封邮件，而不是进行邮件合并操作
                     
-                    # 1. 准备变量字典
-                    variables = {}
-                    # 添加Excel第一行数据的变量
+                    # 使用 process_template_variables 统一处理变量（支持大小写不敏感、签名、{DATETIME}等）
+                    # 准备 Excel 行数据用于变量替换
+                    pt_headers = None
+                    pt_row_data = None
                     if excel_data and len(excel_data) > 1:
-                        headers = excel_data[0]
-                        first_row = excel_data[1]
-                        for i in range(min(len(headers), len(first_row))):
-                            variables["{" + str(headers[i]) + "}"] = str(first_row[i])
-                    
-                    # 添加自定义占位符
-                    for k, v in self.custom_placeholders.items():
-                        variables["{" + str(k) + "}"] = str(v)
-                        
+                        pt_headers = excel_data[0]
+                        pt_row_data = excel_data[1]
+
+                    subject_filled = self.process_template_variables(subject, pt_row_data, pt_headers)
+                    body_filled = self.process_template_variables(body, pt_row_data, pt_headers)
+
+                    # 额外替换配置特有的自定义占位符（可能与全局不同）
                     config_vars = config.get("custom_placeholders", {})
                     for k, v in config_vars.items():
-                        variables["{" + str(k) + "}"] = str(v)
+                        pattern = re.compile(re.escape("{" + str(k) + "}"), re.IGNORECASE)
+                        subject_filled = pattern.sub(str(v), subject_filled)
+                        body_filled = pattern.sub(str(v), body_filled)
 
-                    # 2. 替换变量 (主题和正文)
-                    subject_filled = subject
-                    body_filled = body
+                    # 处理收件人、抄送、密送 (支持变量)
+                    to_filled_list = [self.process_template_variables(email, pt_row_data, pt_headers) for email in to_list]
+                    cc_filled_list = [self.process_template_variables(email, pt_row_data, pt_headers) for email in cc_list]
+                    bcc_filled_list = [self.process_template_variables(email, pt_row_data, pt_headers) for email in bcc_list]
 
-                    # 处理收件人 (支持变量)
-                    to_filled_list = []
-                    for email in to_list:
-                        email_filled = email
-                        for k, v in variables.items():
-                             email_filled = email_filled.replace(k, str(v))
-                        to_filled_list.append(email_filled)
-                    
-                    # 替换一般变量
-                    for k, v in variables.items():
-                        subject_filled = subject_filled.replace(k, str(v))
-                        body_filled = body_filled.replace(k, str(v))
-                    
-                    # 处理时间日期变量
-                    curr_time = datetime.now()
-                    subject_filled = subject_filled.replace("{DATE}", curr_time.strftime("%Y-%m-%d"))
-                    subject_filled = subject_filled.replace("{TIME}", curr_time.strftime("%H:%M:%S"))
-                    body_filled = body_filled.replace("{DATE}", curr_time.strftime("%Y-%m-%d"))
-                    body_filled = body_filled.replace("{TIME}", curr_time.strftime("%H:%M:%S"))
+                    # 额外替换配置特有的自定义占位符
+                    for k, v in config_vars.items():
+                        pattern = re.compile(re.escape("{" + str(k) + "}"), re.IGNORECASE)
+                        to_filled_list = [pattern.sub(str(v), e) for e in to_filled_list]
+                        cc_filled_list = [pattern.sub(str(v), e) for e in cc_filled_list]
+                        bcc_filled_list = [pattern.sub(str(v), e) for e in bcc_filled_list]
 
                     # 构建邮件
                     mail = outlook.CreateItem(0)
                     mail.To = "; ".join(to_filled_list)
-                    if cc_list:
-                         mail.CC = "; ".join(cc_list)
-                    if bcc_list:
-                         mail.BCC = "; ".join(bcc_list)
+                    if cc_filled_list:
+                         mail.CC = "; ".join(cc_filled_list)
+                    if bcc_filled_list:
+                         mail.BCC = "; ".join(bcc_filled_list)
                     
                     if config.get("high_priority", False):
                         mail.Importance = 2
@@ -4868,6 +4861,16 @@ class OutlookDraftManager:
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         ttk.Label(info_frame, text=f"预览生成时间: {now_str}", 
                  font=('TkDefaultFont', 8), foreground='gray').pack(side=tk.LEFT)
+        
+        # 窗口关闭时清理 SMART_IMAGE 临时文件
+        def _cleanup_preview():
+            if smart_img_path and os.path.exists(smart_img_path):
+                try:
+                    os.remove(smart_img_path)
+                except Exception:
+                    pass
+            preview_win.destroy()
+        preview_win.protocol("WM_DELETE_WINDOW", _cleanup_preview)
     
     def toggle_language(self):
         """切换语言"""

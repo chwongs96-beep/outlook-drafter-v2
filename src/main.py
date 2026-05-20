@@ -1650,7 +1650,7 @@ class OutlookDraftManager:
             return body_template.replace("{SMART_IMAGE}", "[错误: 无法获取Excel截图，请检查配置]"), None
             
         # 截图
-        img_path = self.copy_range_as_image_com(excel_path, sheet_name, data_range)
+        img_path = self.generate_image_for_range(excel_path, sheet_name, data_range)
         if not img_path:
              return body_template.replace("{SMART_IMAGE}", "[错误: 截图失败]"), None
              
@@ -2112,6 +2112,28 @@ class OutlookDraftManager:
             print(f"COM Error: {e}")
             return None
 
+    def generate_image_for_range(self, excel_path, sheet_name, data_range):
+        """按当前设置生成截图（支持最后一列高亮）"""
+        if self.highlight_last_column_var.get():
+            result, error = self._internal_read_excel(excel_path, sheet_name, data_range)
+            if result:
+                data_rows, col_widths = result
+                if data_rows:
+                    # 临时替换列宽，避免影响全局读取状态
+                    old_widths = getattr(self, 'excel_column_widths', [])
+                    try:
+                        self.excel_column_widths = col_widths if col_widths else old_widths
+                        highlighted_img = self.create_excel_image(data_rows)
+                        if highlighted_img:
+                            return highlighted_img
+                    finally:
+                        self.excel_column_widths = old_widths
+            if error:
+                print(f"Highlight image fallback: {error}")
+
+        # 默认保持 COM 截图（最贴近原 Excel 样式）
+        return self.copy_range_as_image_com(excel_path, sheet_name, data_range)
+
     def generate_excel_images(self):
         """生成Excel截图，返回图片路径列表"""
         excel_paths_str = self.excel_path_var.get()
@@ -2131,12 +2153,8 @@ class OutlookDraftManager:
             if not os.path.exists(excel_path):
                 continue
 
-            # 若启用最后列高亮，优先使用程序内绘制以应用样式
-            if self.highlight_last_column_var.get() and self.current_excel_data:
-                img_path = self.create_excel_image(self.current_excel_data)
-            else:
-                # 尝试使用 COM 获取精确截图
-                img_path = self.copy_range_as_image_com(excel_path, sheet_name, data_range)
+            # 统一走截图生成逻辑（含可选最后列高亮）
+            img_path = self.generate_image_for_range(excel_path, sheet_name, data_range)
             
             # 如果 COM 失败，回退到手动绘制
             if not img_path and self.current_excel_data:

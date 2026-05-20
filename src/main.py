@@ -458,7 +458,14 @@ class OutlookDraftManager:
         ttk.Button(d_row, text="预览数据", command=self.preview_excel_data).pack(side=tk.LEFT, padx=2)
         ttk.Button(d_row, text="保留格式粘贴", command=self.paste_with_formatting).pack(side=tk.LEFT, padx=2)
         ttk.Button(d_row, text="粘贴为图片", command=self.paste_as_picture).pack(side=tk.LEFT, padx=2)
-        ttk.Button(d_row, text="自动检测对齐", command=self.auto_detect_numeric_alignment).pack(side=tk.LEFT, padx=4)
+        chk_auto_align = ttk.Checkbutton(
+            d_row,
+            text="自动对齐(数值)",
+            variable=self.auto_align_numeric_var,
+            command=self.toggle_auto_align_numeric
+        )
+        chk_auto_align.pack(side=tk.LEFT, padx=4)
+        ToolTip(chk_auto_align, "勾选后，数值单元格在表格/图片中自动右对齐")
         ttk.Checkbutton(
             d_row,
             text="最后行高亮",
@@ -2071,6 +2078,43 @@ class OutlookDraftManager:
         else:
             self.status_var.set("已关闭：最后一行高亮")
 
+    def _count_numeric_cells(self, data_rows):
+        """统计数据区中的数值单元格数量（跳过表头）"""
+        if not data_rows or len(data_rows) <= 1:
+            return 0
+        count = 0
+        for ri, row in enumerate(data_rows):
+            if ri == 0:
+                continue
+            for cell in row:
+                if self._is_numeric_cell(cell):
+                    count += 1
+        return count
+
+    def toggle_auto_align_numeric(self):
+        """切换数值自动对齐开关"""
+        if not self.auto_align_numeric_var.get():
+            self.status_var.set("已关闭：数值自动对齐")
+            return
+
+        numeric_count = self._count_numeric_cells(self.current_excel_data)
+        if numeric_count > 0:
+            self.status_var.set(f"已开启：数值自动对齐（检测到 {numeric_count} 个数值）")
+            return
+
+        # 允许在未读取数据时尝试检测一次，给用户更明确反馈
+        data_rows = None
+        excel_paths_str = self.process_template_variables(self.excel_path_var.get())
+        sheet_name = self.sheet_combo.get()
+        data_range = self.range_var.get().strip()
+        excel_path = excel_paths_str.split(';')[0].strip() if excel_paths_str else ""
+        if excel_path and os.path.exists(excel_path) and sheet_name and data_range:
+            result, _ = self._internal_read_excel(excel_path, sheet_name, data_range)
+            if result:
+                data_rows, _ = result
+        numeric_count = self._count_numeric_cells(data_rows)
+        self.status_var.set(f"已开启：数值自动对齐（检测到 {numeric_count} 个数值）")
+
     def _parse_excel_range_bounds(self, range_text):
         """解析 A1:C3 形式范围，返回 (min_row, max_row, min_col, max_col)"""
         if not range_text:
@@ -2098,7 +2142,7 @@ class OutlookDraftManager:
         min_col, max_col = sorted((start_col, end_col))
         return (min_row, max_row, min_col, max_col)
 
-    def _get_highlight_cells(self, data_rows):
+    def _get_highlight_cells(self, data_rows, base_range_text=None):
         """返回需要高亮的单元格坐标集合 {(ri, ci), ...}"""
         if not self.highlight_last_column_var.get() or not data_rows:
             return set()
@@ -2114,7 +2158,8 @@ class OutlookDraftManager:
                 return set()
             return {(last_row, ci) for ci in range(max_cols)}
 
-        base_bounds = self._parse_excel_range_bounds(self.range_var.get().strip())
+        base_range = base_range_text if base_range_text else self.range_var.get().strip()
+        base_bounds = self._parse_excel_range_bounds(base_range)
         custom_bounds = self._parse_excel_range_bounds(custom_range)
         if not base_bounds or not custom_bounds:
             return set()
@@ -2169,7 +2214,7 @@ class OutlookDraftManager:
         return self.auto_align_numeric_var.get() and row_idx > 0 and self._is_numeric_cell(cell_value)
 
     def auto_detect_numeric_alignment(self):
-        """自动检测数值并启用右对齐"""
+        """兼容旧入口：自动检测数值并启用右对齐"""
         data_rows = self.current_excel_data
         if not data_rows:
             excel_paths_str = self.process_template_variables(self.excel_path_var.get())
@@ -2189,15 +2234,8 @@ class OutlookDraftManager:
             messagebox.showwarning("提示", "没有可检测的数据，请先读取Excel数据。")
             return
 
-        numeric_count = 0
-        for ri, row in enumerate(data_rows):
-            if ri == 0:
-                continue
-            for cell in row:
-                if self._is_numeric_cell(cell):
-                    numeric_count += 1
-
         self.auto_align_numeric_var.set(True)
+        numeric_count = self._count_numeric_cells(data_rows)
         self.status_var.set(f"已启用自动对齐：检测到 {numeric_count} 个数值单元格将右对齐")
         messagebox.showinfo("成功", f"自动检测完成。\n检测到 {numeric_count} 个数值单元格，将在转图片/表格时自动右对齐。")
     
@@ -2263,26 +2301,113 @@ class OutlookDraftManager:
             print(f"COM Error: {e}")
             return None
 
-    def generate_image_for_range(self, excel_path, sheet_name, data_range):
-        """按当前设置生成截图（支持最后一行高亮）"""
-        if self.highlight_last_column_var.get():
-            result, error = self._internal_read_excel(excel_path, sheet_name, data_range)
-            if result:
-                data_rows, col_widths = result
-                if data_rows:
-                    # 临时替换列宽，避免影响全局读取状态
-                    old_widths = getattr(self, 'excel_column_widths', [])
-                    try:
-                        self.excel_column_widths = col_widths if col_widths else old_widths
-                        highlighted_img = self.create_excel_image(data_rows)
-                        if highlighted_img:
-                            return highlighted_img
-                    finally:
-                        self.excel_column_widths = old_widths
-            if error:
-                print(f"Highlight image fallback: {error}")
+    def copy_range_as_image_with_adjustments(self, excel_path, sheet_name, data_range):
+        """在保留原始Excel格式基础上应用样式调整并截图"""
+        if ImageGrab is None:
+            return None
 
-        # 默认保持 COM 截图（最贴近原 Excel 样式）
+        excel = None
+        wb = None
+        temp_wb = None
+        try:
+            # 读取数据用于数值检测与高亮定位
+            result, _ = self._internal_read_excel(excel_path, sheet_name, data_range)
+            if not result:
+                return None
+            data_rows, _ = result
+            if not data_rows:
+                return None
+
+            # 初始化 Excel 应用
+            try:
+                excel = win32com.client.GetActiveObject("Excel.Application")
+            except Exception:
+                excel = win32com.client.Dispatch("Excel.Application")
+
+            abs_path = os.path.abspath(excel_path)
+            wb_opened = False
+            try:
+                for w in excel.Workbooks:
+                    if w.FullName.lower() == abs_path.lower():
+                        wb = w
+                        wb_opened = True
+                        break
+            except Exception:
+                pass
+
+            if not wb:
+                wb = excel.Workbooks.Open(abs_path, ReadOnly=True)
+
+            ws = wb.Sheets(sheet_name)
+            src_rng = ws.Range(data_range)
+            row_count = src_rng.Rows.Count
+            col_count = src_rng.Columns.Count
+
+            # 复制到临时工作簿，保留原始样式后再局部调整
+            temp_wb = excel.Workbooks.Add()
+            temp_ws = temp_wb.Sheets(1)
+            src_rng.Copy()
+            temp_ws.Range("A1").PasteSpecial(Paste=-4104)  # xlPasteAll
+            src_rng.Copy()
+            temp_ws.Range("A1").PasteSpecial(Paste=8)      # xlPasteColumnWidths
+            adjusted_rng = temp_ws.Range(temp_ws.Cells(1, 1), temp_ws.Cells(row_count, col_count))
+
+            # 套用数值自动右对齐（仅数据行）
+            if self.auto_align_numeric_var.get():
+                for ri, row in enumerate(data_rows):
+                    if ri == 0:
+                        continue
+                    for ci, cell in enumerate(row):
+                        if ci >= col_count:
+                            continue
+                        if self._is_numeric_cell(cell):
+                            temp_ws.Cells(ri + 1, ci + 1).HorizontalAlignment = -4152  # xlRight
+
+            # 套用高亮（仅指定范围或默认最后一行）
+            highlight_cells = self._get_highlight_cells(data_rows, base_range_text=data_range)
+            if highlight_cells:
+                for ri, ci in highlight_cells:
+                    if 0 <= ri < row_count and 0 <= ci < col_count:
+                        cell = temp_ws.Cells(ri + 1, ci + 1)
+                        cell.Font.Bold = True
+                        cell.Font.Color = 7953951   # RGB(31, 78, 121) => #1F4E79
+                        cell.Interior.Color = 16313052  # RGB(220, 230, 248) => #DCE6F8
+
+            # 复制临时区域为图片
+            adjusted_rng.CopyPicture(Appearance=1, Format=2)
+            time.sleep(0.5)
+            img = ImageGrab.grabclipboard()
+            if img:
+                temp_dir = tempfile.gettempdir()
+                img_filename = f"excel_paste_adjusted_{uuid.uuid4().hex}.png"
+                img_path = os.path.join(temp_dir, img_filename)
+                img.save(img_path, 'PNG')
+                return img_path
+            return None
+        except Exception as e:
+            print(f"COM Adjusted Image Error: {e}")
+            return None
+        finally:
+            try:
+                if temp_wb:
+                    temp_wb.Close(SaveChanges=False)
+            except Exception:
+                pass
+            try:
+                if wb and not wb_opened:
+                    wb.Close(SaveChanges=False)
+            except Exception:
+                pass
+
+    def generate_image_for_range(self, excel_path, sheet_name, data_range):
+        """按当前设置生成截图（优先保留原始Excel格式）"""
+        if self.highlight_last_column_var.get() or self.auto_align_numeric_var.get():
+            adjusted_img = self.copy_range_as_image_with_adjustments(excel_path, sheet_name, data_range)
+            if adjusted_img:
+                return adjusted_img
+            print("Adjusted COM image fallback to raw COM copy.")
+
+        # 默认保持 COM 截图（完全原始样式）
         return self.copy_range_as_image_com(excel_path, sheet_name, data_range)
 
     def generate_excel_images(self):

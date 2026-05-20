@@ -2346,6 +2346,11 @@ class OutlookDraftManager:
             # 复制到临时工作簿，保留原始样式后再局部调整
             temp_wb = excel.Workbooks.Add()
             temp_ws = temp_wb.Sheets(1)
+            # 保持与原图一致：关闭临时窗口网格线，避免截图出现背景格线
+            try:
+                temp_wb.Windows(1).DisplayGridlines = False
+            except Exception:
+                pass
             src_rng.Copy()
             temp_ws.Range("A1").PasteSpecial(Paste=-4104)  # xlPasteAll
             src_rng.Copy()

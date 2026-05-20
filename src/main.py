@@ -183,6 +183,7 @@ class OutlookDraftManager:
         # 新增：智能匹配相关变量
         self.smart_match_var = tk.BooleanVar(value=False)
         self.filename_keyword_var = tk.StringVar()
+        self.highlight_last_column_var = tk.BooleanVar(value=False)
 
         # 自动保存定时器
         self.auto_save_timer = None
@@ -454,6 +455,12 @@ class OutlookDraftManager:
         ttk.Button(d_row, text="预览数据", command=self.preview_excel_data).pack(side=tk.LEFT, padx=2)
         ttk.Button(d_row, text="保留格式粘贴", command=self.paste_with_formatting).pack(side=tk.LEFT, padx=2)
         ttk.Button(d_row, text="粘贴为图片", command=self.paste_as_picture).pack(side=tk.LEFT, padx=2)
+        ttk.Checkbutton(
+            d_row,
+            text="最后列高亮",
+            variable=self.highlight_last_column_var,
+            command=self.toggle_last_column_highlight
+        ).pack(side=tk.LEFT, padx=6)
         
         # 列限制
         l_row = ttk.Frame(excel_frame)
@@ -815,6 +822,7 @@ class OutlookDraftManager:
         self.subject_var.set("")
         self.body_text.delete(1.0, tk.END)
         self.sheet_combo.set("")
+        self.highlight_last_column_var.set(False)
         self.current_excel_data = None
         self.attachments = []
         self.update_attachment_list()
@@ -848,7 +856,8 @@ class OutlookDraftManager:
             "read_receipt": self.receipt_var.get(),    # 保存已读回执
             "smart_match": self.smart_match_var.get(), # 保存智能匹配开关
             "filename_keyword": self.filename_keyword_var.get(), # 保存关键词
-            "attach_excel": self.attach_excel_var.get() # 保存是否附带源文件
+            "attach_excel": self.attach_excel_var.get(), # 保存是否附带源文件
+            "highlight_last_column": self.highlight_last_column_var.get() # 保存最后列高亮开关
         }
         
         self.configs[config_name] = config_data
@@ -912,6 +921,7 @@ class OutlookDraftManager:
         self.smart_match_var.set(config.get("smart_match", False))
         self.filename_keyword_var.set(config.get("filename_keyword", ""))
         self.attach_excel_var.set(config.get("attach_excel", False))
+        self.highlight_last_column_var.set(config.get("highlight_last_column", False))
         
         # 加载自定义占位符
         self.custom_placeholders = config.get("custom_placeholders", {}).copy()
@@ -2032,6 +2042,13 @@ class OutlookDraftManager:
             error_details = traceback.format_exc()
             messagebox.showerror("错误", f"插入表格失败:\n{str(e)}\n\n详细信息:\n{error_details}")
             self.status_var.set("插入失败")
+
+    def toggle_last_column_highlight(self):
+        """切换最后一列高亮样式（蓝色+粗体）"""
+        if self.highlight_last_column_var.get():
+            self.status_var.set("已开启：最后一列将使用蓝色粗体高亮")
+        else:
+            self.status_var.set("已关闭：最后一列高亮")
     
     def copy_range_as_image_com(self, excel_path, sheet_name, data_range):
         """使用 COM 接口调用 Excel 复制范围为图片 (保留原格式)"""
@@ -2113,9 +2130,13 @@ class OutlookDraftManager:
         for excel_path in file_paths:
             if not os.path.exists(excel_path):
                 continue
-            
-            # 尝试使用 COM 获取精确截图
-            img_path = self.copy_range_as_image_com(excel_path, sheet_name, data_range)
+
+            # 若启用最后列高亮，优先使用程序内绘制以应用样式
+            if self.highlight_last_column_var.get() and self.current_excel_data:
+                img_path = self.create_excel_image(self.current_excel_data)
+            else:
+                # 尝试使用 COM 获取精确截图
+                img_path = self.copy_range_as_image_com(excel_path, sheet_name, data_range)
             
             # 如果 COM 失败，回退到手动绘制
             if not img_path and self.current_excel_data:
@@ -2177,6 +2198,8 @@ class OutlookDraftManager:
     def generate_formatted_html_table(self, data_rows):
         """生成带格式的 HTML 表格（模拟 Keep Source Formatting）- 使用 Excel 实际列宽"""
         html = '<table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse; font-family:Calibri,Arial,sans-serif; font-size:11pt;">\n'
+        highlight_last_col = self.highlight_last_column_var.get()
+        last_col_index = max((len(r) for r in data_rows), default=0) - 1
         
         # 如果有列宽信息，添加 colgroup
         if hasattr(self, 'excel_column_widths') and self.excel_column_widths:
@@ -2197,7 +2220,10 @@ class OutlookDraftManager:
                 if i == 0:  # 表头
                     html += f'    <th style="background-color:#4472C4; color:white; font-weight:bold; text-align:left; padding:8px; border:1px solid #2E5C8A;{width_style}">{cell_value}</th>\n'
                 else:  # 数据行
-                    html += f'    <td style="background-color:white; color:#000000; padding:8px; border:1px solid #D0D0D0;{width_style}">{cell_value}</td>\n'
+                    if highlight_last_col and j == last_col_index:
+                        html += f'    <td style="background-color:#DCE6F8; color:#1F4E79; font-weight:bold; padding:8px; border:1px solid #AFC3E8;{width_style}">{cell_value}</td>\n'
+                    else:
+                        html += f'    <td style="background-color:white; color:#000000; padding:8px; border:1px solid #D0D0D0;{width_style}">{cell_value}</td>\n'
             html += '  </tr>\n'
         
         html += '</table>'
@@ -2258,6 +2284,8 @@ class OutlookDraftManager:
             
             # 计算图片尺寸
             padding = 10
+            highlight_last_col = self.highlight_last_column_var.get()
+            last_col_index = cols - 1
             # 如果没有使用 Excel 列宽，则根据字体大小重新计算
             if not (hasattr(self, 'excel_column_widths') and self.excel_column_widths and len(self.excel_column_widths) >= cols):
                 char_width = font_size * 0.6 if font_size else 8
@@ -2289,8 +2317,17 @@ class OutlookDraftManager:
                             # 绘制文字
                             draw.text((x + 6, y + 4), cell, fill='white', font=font)
                         else:  # 数据行
-                            draw.rectangle([x, y, x + w, y + row_height], fill='white', outline='#D0D0D0')
-                            draw.text((x + 6, y + 4), cell, fill='black', font=font)
+                            is_last_col = highlight_last_col and ci == last_col_index
+                            bg_color = '#DCE6F8' if is_last_col else 'white'
+                            border_color = '#AFC3E8' if is_last_col else '#D0D0D0'
+                            text_color = '#1F4E79' if is_last_col else 'black'
+                            draw.rectangle([x, y, x + w, y + row_height], fill=bg_color, outline=border_color)
+                            if is_last_col:
+                                # 通过轻微偏移重复绘制模拟粗体效果
+                                draw.text((x + 6, y + 4), cell, fill=text_color, font=font)
+                                draw.text((x + 7, y + 4), cell, fill=text_color, font=font)
+                            else:
+                                draw.text((x + 6, y + 4), cell, fill=text_color, font=font)
                     except Exception as e:
                         # 如果绘制失败，跳过该单元格
                         pass

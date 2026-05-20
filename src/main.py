@@ -187,6 +187,7 @@ class OutlookDraftManager:
         self.highlight_last_column_var = tk.BooleanVar(value=False)
         self.highlight_range_var = tk.StringVar(value="")
         self.auto_align_numeric_var = tk.BooleanVar(value=False)
+        self.auto_align_columns_var = tk.StringVar(value="")
 
         # 自动保存定时器
         self.auto_save_timer = None
@@ -466,6 +467,10 @@ class OutlookDraftManager:
         )
         chk_auto_align.pack(side=tk.LEFT, padx=4)
         ToolTip(chk_auto_align, "勾选后，数值单元格在表格/图片中自动右对齐")
+        ttk.Label(d_row, text="对齐列:").pack(side=tk.LEFT, padx=(6, 2))
+        align_col_entry = ttk.Entry(d_row, textvariable=self.auto_align_columns_var, width=12)
+        align_col_entry.pack(side=tk.LEFT, padx=2)
+        ToolTip(align_col_entry, "可选，例: A,C:E 或 1,3-5。留空=全部数值列")
         ttk.Checkbutton(
             d_row,
             text="最后行高亮",
@@ -840,6 +845,7 @@ class OutlookDraftManager:
         self.highlight_last_column_var.set(False)
         self.highlight_range_var.set("")
         self.auto_align_numeric_var.set(False)
+        self.auto_align_columns_var.set("")
         self.current_excel_data = None
         self.attachments = []
         self.update_attachment_list()
@@ -877,7 +883,8 @@ class OutlookDraftManager:
             "highlight_last_column": self.highlight_last_column_var.get(), # 兼容旧配置键名
             "highlight_last_row": self.highlight_last_column_var.get(), # 保存最后行高亮开关
             "highlight_range": self.highlight_range_var.get().strip(), # 保存自定义高亮范围
-            "auto_align_numeric": self.auto_align_numeric_var.get() # 保存数值自动对齐开关
+            "auto_align_numeric": self.auto_align_numeric_var.get(), # 保存数值自动对齐开关
+            "auto_align_columns": self.auto_align_columns_var.get().strip() # 保存自动对齐列
         }
         
         self.configs[config_name] = config_data
@@ -946,6 +953,7 @@ class OutlookDraftManager:
         )
         self.highlight_range_var.set(config.get("highlight_range", ""))
         self.auto_align_numeric_var.set(config.get("auto_align_numeric", False))
+        self.auto_align_columns_var.set(config.get("auto_align_columns", ""))
         
         # 加载自定义占位符
         self.custom_placeholders = config.get("custom_placeholders", {}).copy()
@@ -2097,9 +2105,10 @@ class OutlookDraftManager:
             self.status_var.set("已关闭：数值自动对齐")
             return
 
+        col_spec = self.auto_align_columns_var.get().strip() or "全部数值列"
         numeric_count = self._count_numeric_cells(self.current_excel_data)
         if numeric_count > 0:
-            self.status_var.set(f"已开启：数值自动对齐（检测到 {numeric_count} 个数值）")
+            self.status_var.set(f"已开启：数值自动对齐（列: {col_spec}，数值 {numeric_count} 个）")
             return
 
         # 允许在未读取数据时尝试检测一次，给用户更明确反馈
@@ -2113,7 +2122,7 @@ class OutlookDraftManager:
             if result:
                 data_rows, _ = result
         numeric_count = self._count_numeric_cells(data_rows)
-        self.status_var.set(f"已开启：数值自动对齐（检测到 {numeric_count} 个数值）")
+        self.status_var.set(f"已开启：数值自动对齐（列: {col_spec}，数值 {numeric_count} 个）")
 
     def _parse_excel_range_bounds(self, range_text):
         """解析 A1:C3 形式范围，返回 (min_row, max_row, min_col, max_col)"""
@@ -2209,9 +2218,119 @@ class OutlookDraftManager:
         except Exception:
             return False
 
-    def _should_right_align(self, row_idx, cell_value):
+    def _parse_numeric_value(self, value):
+        """解析数值，返回 (is_numeric, numeric_value)"""
+        if value is None or isinstance(value, bool):
+            return False, None
+        if isinstance(value, (int, float)):
+            return True, float(value)
+
+        text = str(value).strip()
+        if not text:
+            return False, None
+
+        negative_parentheses = text.startswith("(") and text.endswith(")")
+        if negative_parentheses:
+            text = text[1:-1]
+        has_percent = text.endswith("%")
+        if has_percent:
+            text = text[:-1]
+        text = text.replace(",", "").strip()
+
+        try:
+            number = float(text)
+            if negative_parentheses:
+                number = -number
+            if has_percent:
+                number = number / 100
+            return True, number
+        except Exception:
+            return False, None
+
+    def _format_numeric_for_output(self, value):
+        """输出格式：千分位，0 显示为 '-'"""
+        is_numeric, numeric_value = self._parse_numeric_value(value)
+        if not is_numeric:
+            return value
+
+        if abs(numeric_value) < 1e-12:
+            return "-"
+
+        decimals = 0
+        if isinstance(value, float) and not float(value).is_integer():
+            decimals = 2
+        else:
+            raw = str(value).strip().replace(",", "")
+            if raw.startswith("(") and raw.endswith(")"):
+                raw = raw[1:-1]
+            if raw.endswith("%"):
+                raw = raw[:-1]
+            if "." in raw:
+                decimals = min(6, len(raw.split(".", 1)[1]))
+
+        fmt = f"{{:,.{decimals}f}}" if decimals > 0 else "{:,.0f}"
+        return fmt.format(numeric_value)
+
+    def _get_auto_align_target_columns(self, max_cols):
+        """解析自动对齐列配置，返回0基索引集合"""
+        if max_cols <= 0:
+            return set()
+
+        spec = self.auto_align_columns_var.get().strip().upper()
+        if not spec:
+            return set(range(max_cols))
+
+        base_bounds = self._parse_excel_range_bounds(self.range_var.get().strip())
+        base_col_start = base_bounds[2] if base_bounds else 1
+        targets = set()
+
+        for token in [x.strip() for x in spec.split(",") if x.strip()]:
+            m_abs = re.match(r"^([A-Z]+)\s*[:\-]\s*([A-Z]+)$", token)
+            if m_abs:
+                try:
+                    s = column_index_from_string(m_abs.group(1))
+                    e = column_index_from_string(m_abs.group(2))
+                    for col_num in range(min(s, e), max(s, e) + 1):
+                        idx = col_num - base_col_start
+                        if 0 <= idx < max_cols:
+                            targets.add(idx)
+                    continue
+                except Exception:
+                    pass
+
+            m_num = re.match(r"^(\d+)\s*[:\-]\s*(\d+)$", token)
+            if m_num:
+                s = int(m_num.group(1))
+                e = int(m_num.group(2))
+                for idx in range(min(s, e) - 1, max(s, e)):
+                    if 0 <= idx < max_cols:
+                        targets.add(idx)
+                continue
+
+            if re.match(r"^[A-Z]+$", token):
+                try:
+                    col_num = column_index_from_string(token)
+                    idx = col_num - base_col_start
+                    if 0 <= idx < max_cols:
+                        targets.add(idx)
+                    continue
+                except Exception:
+                    pass
+
+            if token.isdigit():
+                idx = int(token) - 1
+                if 0 <= idx < max_cols:
+                    targets.add(idx)
+
+        return targets if targets else set(range(max_cols))
+
+    def _should_right_align(self, row_idx, col_idx, cell_value, max_cols):
         """是否需要右对齐（仅数据行）"""
-        return self.auto_align_numeric_var.get() and row_idx > 0 and self._is_numeric_cell(cell_value)
+        if not self.auto_align_numeric_var.get() or row_idx <= 0:
+            return False
+        if col_idx not in self._get_auto_align_target_columns(max_cols):
+            return False
+        return self._is_numeric_cell(cell_value)
 
     def auto_detect_numeric_alignment(self):
         """兼容旧入口：自动检测数值并启用右对齐"""
@@ -2235,9 +2354,10 @@ class OutlookDraftManager:
             return
 
         self.auto_align_numeric_var.set(True)
+        col_spec = self.auto_align_columns_var.get().strip() or "全部数值列"
         numeric_count = self._count_numeric_cells(data_rows)
-        self.status_var.set(f"已启用自动对齐：检测到 {numeric_count} 个数值单元格将右对齐")
-        messagebox.showinfo("成功", f"自动检测完成。\n检测到 {numeric_count} 个数值单元格，将在转图片/表格时自动右对齐。")
+        self.status_var.set(f"已启用自动对齐：列 {col_spec}，检测到 {numeric_count} 个数值单元格")
+        messagebox.showinfo("成功", f"自动检测完成。\n列：{col_spec}\n检测到 {numeric_count} 个数值单元格，将在转图片/表格时自动右对齐。")
     
     def copy_range_as_image_com(self, excel_path, sheet_name, data_range):
         """使用 COM 接口调用 Excel 复制范围为图片 (保留原格式)"""
@@ -2359,13 +2479,15 @@ class OutlookDraftManager:
 
             # 套用数值自动右对齐（仅数据行）
             if self.auto_align_numeric_var.get():
+                target_cols = self._get_auto_align_target_columns(col_count)
                 for ri, row in enumerate(data_rows):
                     if ri == 0:
                         continue
                     for ci, cell in enumerate(row):
                         if ci >= col_count:
                             continue
-                        if self._is_numeric_cell(cell):
+                        if ci in target_cols and self._is_numeric_cell(cell):
+                            temp_ws.Cells(ri + 1, ci + 1).Value = self._format_numeric_for_output(cell)
                             temp_ws.Cells(ri + 1, ci + 1).HorizontalAlignment = -4152  # xlRight
 
             # 套用高亮（仅指定范围或默认最后一行）
@@ -2508,8 +2630,10 @@ class OutlookDraftManager:
         
         for i, row in enumerate(data_rows):
             html += '  <tr>\n'
+            max_cols = max((len(r) for r in data_rows), default=0)
             for j, cell in enumerate(row):
-                cell_value = "" if cell is None else str(cell)
+                display_value = self._format_numeric_for_output(cell) if self._should_right_align(i, j, cell, max_cols) else cell
+                cell_value = "" if display_value is None else str(display_value)
                 # 获取列宽（如果有）
                 width_style = ""
                 if hasattr(self, 'excel_column_widths') and self.excel_column_widths and j < len(self.excel_column_widths):
@@ -2518,7 +2642,7 @@ class OutlookDraftManager:
                 if i == 0:  # 表头
                     html += f'    <th style="background-color:#4472C4; color:white; font-weight:bold; text-align:left; padding:8px; border:1px solid #2E5C8A;{width_style}">{cell_value}</th>\n'
                 else:  # 数据行
-                    align_style = " text-align:right;" if self._should_right_align(i, cell) else ""
+                    align_style = " text-align:right;" if self._should_right_align(i, j, cell, max_cols) else ""
                     if (i, j) in highlight_cells:
                         html += f'    <td style="background-color:#DCE6F8; color:#1F4E79; font-weight:bold; padding:8px; border:1px solid #AFC3E8;{width_style}{align_style}">{cell_value}</td>\n'
                     else:
@@ -2604,7 +2728,11 @@ class OutlookDraftManager:
                 x = padding
                 for ci in range(cols):
                     cell_raw = row[ci] if ci < len(row) else None
-                    cell = "" if cell_raw is None else str(cell_raw)
+                    if self._should_right_align(ri, ci, cell_raw, cols):
+                        cell_raw_for_draw = self._format_numeric_for_output(cell_raw)
+                    else:
+                        cell_raw_for_draw = cell_raw
+                    cell = "" if cell_raw_for_draw is None else str(cell_raw_for_draw)
                     w = col_pixel_widths[ci]
                     
                     try:
@@ -2622,7 +2750,7 @@ class OutlookDraftManager:
                             text_color = '#1F4E79' if is_highlight else 'black'
                             draw.rectangle([x, y, x + w, y + row_height], fill=bg_color, outline=border_color)
                             text_x = x + 6
-                            if self._should_right_align(ri, cell_raw):
+                            if self._should_right_align(ri, ci, cell_raw, cols):
                                 try:
                                     bbox = draw.textbbox((0, 0), cell, font=font)
                                     text_w = max(0, bbox[2] - bbox[0])

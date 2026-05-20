@@ -11,6 +11,7 @@ import json
 import os
 import win32com.client
 import openpyxl
+from openpyxl.utils import column_index_from_string
 from datetime import datetime
 import re
 from pathlib import Path
@@ -184,6 +185,8 @@ class OutlookDraftManager:
         self.smart_match_var = tk.BooleanVar(value=False)
         self.filename_keyword_var = tk.StringVar()
         self.highlight_last_column_var = tk.BooleanVar(value=False)
+        self.highlight_range_var = tk.StringVar(value="")
+        self.auto_align_numeric_var = tk.BooleanVar(value=False)
 
         # 自动保存定时器
         self.auto_save_timer = None
@@ -455,12 +458,17 @@ class OutlookDraftManager:
         ttk.Button(d_row, text="预览数据", command=self.preview_excel_data).pack(side=tk.LEFT, padx=2)
         ttk.Button(d_row, text="保留格式粘贴", command=self.paste_with_formatting).pack(side=tk.LEFT, padx=2)
         ttk.Button(d_row, text="粘贴为图片", command=self.paste_as_picture).pack(side=tk.LEFT, padx=2)
+        ttk.Button(d_row, text="自动检测对齐", command=self.auto_detect_numeric_alignment).pack(side=tk.LEFT, padx=4)
         ttk.Checkbutton(
             d_row,
-            text="最后列高亮",
+            text="最后行高亮",
             variable=self.highlight_last_column_var,
             command=self.toggle_last_column_highlight
         ).pack(side=tk.LEFT, padx=6)
+        ttk.Label(d_row, text="高亮范围:").pack(side=tk.LEFT, padx=(8, 2))
+        highlight_entry = ttk.Entry(d_row, textvariable=self.highlight_range_var, width=12)
+        highlight_entry.pack(side=tk.LEFT, padx=2)
+        ToolTip(highlight_entry, "可选，例: A10:C10。留空时默认高亮最后一行")
         
         # 列限制
         l_row = ttk.Frame(excel_frame)
@@ -823,6 +831,8 @@ class OutlookDraftManager:
         self.body_text.delete(1.0, tk.END)
         self.sheet_combo.set("")
         self.highlight_last_column_var.set(False)
+        self.highlight_range_var.set("")
+        self.auto_align_numeric_var.set(False)
         self.current_excel_data = None
         self.attachments = []
         self.update_attachment_list()
@@ -857,7 +867,10 @@ class OutlookDraftManager:
             "smart_match": self.smart_match_var.get(), # 保存智能匹配开关
             "filename_keyword": self.filename_keyword_var.get(), # 保存关键词
             "attach_excel": self.attach_excel_var.get(), # 保存是否附带源文件
-            "highlight_last_column": self.highlight_last_column_var.get() # 保存最后列高亮开关
+            "highlight_last_column": self.highlight_last_column_var.get(), # 兼容旧配置键名
+            "highlight_last_row": self.highlight_last_column_var.get(), # 保存最后行高亮开关
+            "highlight_range": self.highlight_range_var.get().strip(), # 保存自定义高亮范围
+            "auto_align_numeric": self.auto_align_numeric_var.get() # 保存数值自动对齐开关
         }
         
         self.configs[config_name] = config_data
@@ -921,7 +934,11 @@ class OutlookDraftManager:
         self.smart_match_var.set(config.get("smart_match", False))
         self.filename_keyword_var.set(config.get("filename_keyword", ""))
         self.attach_excel_var.set(config.get("attach_excel", False))
-        self.highlight_last_column_var.set(config.get("highlight_last_column", False))
+        self.highlight_last_column_var.set(
+            config.get("highlight_last_row", config.get("highlight_last_column", False))
+        )
+        self.highlight_range_var.set(config.get("highlight_range", ""))
+        self.auto_align_numeric_var.set(config.get("auto_align_numeric", False))
         
         # 加载自定义占位符
         self.custom_placeholders = config.get("custom_placeholders", {}).copy()
@@ -2044,11 +2061,145 @@ class OutlookDraftManager:
             self.status_var.set("插入失败")
 
     def toggle_last_column_highlight(self):
-        """切换最后一列高亮样式（蓝色+粗体）"""
+        """切换最后一行高亮样式（蓝色+粗体）"""
         if self.highlight_last_column_var.get():
-            self.status_var.set("已开启：最后一列将使用蓝色粗体高亮")
+            custom_range = self.highlight_range_var.get().strip()
+            if custom_range:
+                self.status_var.set(f"已开启：将高亮范围 {custom_range}（蓝色粗体）")
+            else:
+                self.status_var.set("已开启：最后一行将使用蓝色粗体高亮")
         else:
-            self.status_var.set("已关闭：最后一列高亮")
+            self.status_var.set("已关闭：最后一行高亮")
+
+    def _parse_excel_range_bounds(self, range_text):
+        """解析 A1:C3 形式范围，返回 (min_row, max_row, min_col, max_col)"""
+        if not range_text:
+            return None
+        text = str(range_text).strip().replace("$", "").upper()
+        if not text:
+            return None
+
+        if ":" in text:
+            start_ref, end_ref = text.split(":", 1)
+        else:
+            start_ref, end_ref = text, text
+
+        m_start = re.match(r"^([A-Z]+)(\d+)$", start_ref.strip())
+        m_end = re.match(r"^([A-Z]+)(\d+)$", end_ref.strip())
+        if not m_start or not m_end:
+            return None
+
+        start_col = column_index_from_string(m_start.group(1))
+        start_row = int(m_start.group(2))
+        end_col = column_index_from_string(m_end.group(1))
+        end_row = int(m_end.group(2))
+
+        min_row, max_row = sorted((start_row, end_row))
+        min_col, max_col = sorted((start_col, end_col))
+        return (min_row, max_row, min_col, max_col)
+
+    def _get_highlight_cells(self, data_rows):
+        """返回需要高亮的单元格坐标集合 {(ri, ci), ...}"""
+        if not self.highlight_last_column_var.get() or not data_rows:
+            return set()
+
+        max_cols = max((len(r) for r in data_rows), default=0)
+        if max_cols <= 0:
+            return set()
+
+        custom_range = self.highlight_range_var.get().strip()
+        if not custom_range:
+            last_row = len(data_rows) - 1
+            if last_row <= 0:  # 仅有表头时不高亮
+                return set()
+            return {(last_row, ci) for ci in range(max_cols)}
+
+        base_bounds = self._parse_excel_range_bounds(self.range_var.get().strip())
+        custom_bounds = self._parse_excel_range_bounds(custom_range)
+        if not base_bounds or not custom_bounds:
+            return set()
+
+        b_min_row, b_max_row, b_min_col, b_max_col = base_bounds
+        c_min_row, c_max_row, c_min_col, c_max_col = custom_bounds
+
+        i_min_row = max(b_min_row, c_min_row)
+        i_max_row = min(b_max_row, c_max_row)
+        i_min_col = max(b_min_col, c_min_col)
+        i_max_col = min(b_max_col, c_max_col)
+        if i_min_row > i_max_row or i_min_col > i_max_col:
+            return set()
+
+        cells = set()
+        for row_num in range(i_min_row, i_max_row + 1):
+            for col_num in range(i_min_col, i_max_col + 1):
+                ri = row_num - b_min_row
+                ci = col_num - b_min_col
+                if 0 <= ri < len(data_rows) and 0 <= ci < max_cols:
+                    cells.add((ri, ci))
+        return cells
+
+    def _is_numeric_cell(self, value):
+        """判断单元格是否为数值（用于自动对齐）"""
+        if value is None:
+            return False
+        if isinstance(value, bool):
+            return False
+        if isinstance(value, (int, float)):
+            return True
+
+        text = str(value).strip()
+        if not text:
+            return False
+
+        # 支持常见格式：1,234.56 / (123) / 98%
+        negative_parentheses = text.startswith("(") and text.endswith(")")
+        if negative_parentheses:
+            text = text[1:-1]
+        if text.endswith("%"):
+            text = text[:-1]
+        text = text.replace(",", "").strip()
+        try:
+            float(text)
+            return True
+        except Exception:
+            return False
+
+    def _should_right_align(self, row_idx, cell_value):
+        """是否需要右对齐（仅数据行）"""
+        return self.auto_align_numeric_var.get() and row_idx > 0 and self._is_numeric_cell(cell_value)
+
+    def auto_detect_numeric_alignment(self):
+        """自动检测数值并启用右对齐"""
+        data_rows = self.current_excel_data
+        if not data_rows:
+            excel_paths_str = self.process_template_variables(self.excel_path_var.get())
+            sheet_name = self.sheet_combo.get()
+            data_range = self.range_var.get().strip()
+            excel_path = excel_paths_str.split(';')[0].strip() if excel_paths_str else ""
+
+            if excel_path and os.path.exists(excel_path) and sheet_name and data_range:
+                result, error = self._internal_read_excel(excel_path, sheet_name, data_range)
+                if result:
+                    data_rows, _ = result
+                elif error:
+                    messagebox.showwarning("提示", f"自动检测失败：{error}\n请先读取数据后再试。")
+                    return
+
+        if not data_rows or len(data_rows) <= 1:
+            messagebox.showwarning("提示", "没有可检测的数据，请先读取Excel数据。")
+            return
+
+        numeric_count = 0
+        for ri, row in enumerate(data_rows):
+            if ri == 0:
+                continue
+            for cell in row:
+                if self._is_numeric_cell(cell):
+                    numeric_count += 1
+
+        self.auto_align_numeric_var.set(True)
+        self.status_var.set(f"已启用自动对齐：检测到 {numeric_count} 个数值单元格将右对齐")
+        messagebox.showinfo("成功", f"自动检测完成。\n检测到 {numeric_count} 个数值单元格，将在转图片/表格时自动右对齐。")
     
     def copy_range_as_image_com(self, excel_path, sheet_name, data_range):
         """使用 COM 接口调用 Excel 复制范围为图片 (保留原格式)"""
@@ -2113,7 +2264,7 @@ class OutlookDraftManager:
             return None
 
     def generate_image_for_range(self, excel_path, sheet_name, data_range):
-        """按当前设置生成截图（支持最后一列高亮）"""
+        """按当前设置生成截图（支持最后一行高亮）"""
         if self.highlight_last_column_var.get():
             result, error = self._internal_read_excel(excel_path, sheet_name, data_range)
             if result:
@@ -2216,8 +2367,7 @@ class OutlookDraftManager:
     def generate_formatted_html_table(self, data_rows):
         """生成带格式的 HTML 表格（模拟 Keep Source Formatting）- 使用 Excel 实际列宽"""
         html = '<table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse; font-family:Calibri,Arial,sans-serif; font-size:11pt;">\n'
-        highlight_last_col = self.highlight_last_column_var.get()
-        last_col_index = max((len(r) for r in data_rows), default=0) - 1
+        highlight_cells = self._get_highlight_cells(data_rows)
         
         # 如果有列宽信息，添加 colgroup
         if hasattr(self, 'excel_column_widths') and self.excel_column_widths:
@@ -2229,7 +2379,7 @@ class OutlookDraftManager:
         for i, row in enumerate(data_rows):
             html += '  <tr>\n'
             for j, cell in enumerate(row):
-                cell_value = str(cell) if cell else ""
+                cell_value = "" if cell is None else str(cell)
                 # 获取列宽（如果有）
                 width_style = ""
                 if hasattr(self, 'excel_column_widths') and self.excel_column_widths and j < len(self.excel_column_widths):
@@ -2238,10 +2388,11 @@ class OutlookDraftManager:
                 if i == 0:  # 表头
                     html += f'    <th style="background-color:#4472C4; color:white; font-weight:bold; text-align:left; padding:8px; border:1px solid #2E5C8A;{width_style}">{cell_value}</th>\n'
                 else:  # 数据行
-                    if highlight_last_col and j == last_col_index:
-                        html += f'    <td style="background-color:#DCE6F8; color:#1F4E79; font-weight:bold; padding:8px; border:1px solid #AFC3E8;{width_style}">{cell_value}</td>\n'
+                    align_style = " text-align:right;" if self._should_right_align(i, cell) else ""
+                    if (i, j) in highlight_cells:
+                        html += f'    <td style="background-color:#DCE6F8; color:#1F4E79; font-weight:bold; padding:8px; border:1px solid #AFC3E8;{width_style}{align_style}">{cell_value}</td>\n'
                     else:
-                        html += f'    <td style="background-color:white; color:#000000; padding:8px; border:1px solid #D0D0D0;{width_style}">{cell_value}</td>\n'
+                        html += f'    <td style="background-color:white; color:#000000; padding:8px; border:1px solid #D0D0D0;{width_style}{align_style}">{cell_value}</td>\n'
             html += '  </tr>\n'
         
         html += '</table>'
@@ -2302,8 +2453,7 @@ class OutlookDraftManager:
             
             # 计算图片尺寸
             padding = 10
-            highlight_last_col = self.highlight_last_column_var.get()
-            last_col_index = cols - 1
+            highlight_cells = self._get_highlight_cells(data_rows)
             # 如果没有使用 Excel 列宽，则根据字体大小重新计算
             if not (hasattr(self, 'excel_column_widths') and self.excel_column_widths and len(self.excel_column_widths) >= cols):
                 char_width = font_size * 0.6 if font_size else 8
@@ -2323,7 +2473,8 @@ class OutlookDraftManager:
             for ri, row in enumerate(data_rows):
                 x = padding
                 for ci in range(cols):
-                    cell = str(row[ci]) if ci < len(row) and row[ci] is not None else ""
+                    cell_raw = row[ci] if ci < len(row) else None
+                    cell = "" if cell_raw is None else str(cell_raw)
                     w = col_pixel_widths[ci]
                     
                     try:
@@ -2335,17 +2486,25 @@ class OutlookDraftManager:
                             # 绘制文字
                             draw.text((x + 6, y + 4), cell, fill='white', font=font)
                         else:  # 数据行
-                            is_last_col = highlight_last_col and ci == last_col_index
-                            bg_color = '#DCE6F8' if is_last_col else 'white'
-                            border_color = '#AFC3E8' if is_last_col else '#D0D0D0'
-                            text_color = '#1F4E79' if is_last_col else 'black'
+                            is_highlight = (ri, ci) in highlight_cells
+                            bg_color = '#DCE6F8' if is_highlight else 'white'
+                            border_color = '#AFC3E8' if is_highlight else '#D0D0D0'
+                            text_color = '#1F4E79' if is_highlight else 'black'
                             draw.rectangle([x, y, x + w, y + row_height], fill=bg_color, outline=border_color)
-                            if is_last_col:
+                            text_x = x + 6
+                            if self._should_right_align(ri, cell_raw):
+                                try:
+                                    bbox = draw.textbbox((0, 0), cell, font=font)
+                                    text_w = max(0, bbox[2] - bbox[0])
+                                except Exception:
+                                    text_w = int(len(cell) * max(8, font_size * 0.6))
+                                text_x = max(x + 6, x + w - 6 - text_w)
+                            if is_highlight:
                                 # 通过轻微偏移重复绘制模拟粗体效果
-                                draw.text((x + 6, y + 4), cell, fill=text_color, font=font)
-                                draw.text((x + 7, y + 4), cell, fill=text_color, font=font)
+                                draw.text((text_x, y + 4), cell, fill=text_color, font=font)
+                                draw.text((text_x + 1, y + 4), cell, fill=text_color, font=font)
                             else:
-                                draw.text((x + 6, y + 4), cell, fill=text_color, font=font)
+                                draw.text((text_x, y + 4), cell, fill=text_color, font=font)
                     except Exception as e:
                         # 如果绘制失败，跳过该单元格
                         pass
